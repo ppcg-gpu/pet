@@ -2494,6 +2494,7 @@ static __isl_give isl_union_map *stmt_collect_accesses(struct pet_stmt *stmt,
 	enum pet_expr_access_type type, int tag, __isl_take isl_space *dim)
 {
 	struct pet_expr_collect_accesses_data data = { type, tag };
+	int i;
 	int must;
 	isl_set *domain;
 
@@ -2526,9 +2527,15 @@ static __isl_give isl_union_map *stmt_collect_accesses(struct pet_stmt *stmt,
 						data.accesses, data.domain);
 		pet_expr_free(arg);
 		pet_expr_free(body);
-	} else if (pet_tree_foreach_access_expr(stmt->body,
-					&expr_collect_accesses, &data) < 0)
-		data.accesses = isl_union_map_free(data.accesses);
+	} else  {
+		for (i = 0; i < stmt->n_arg; ++i)
+			data.accesses = expr_collect_access(stmt->args[i],
+						type, tag,
+						data.accesses, data.domain);
+		if (pet_tree_foreach_access_expr(stmt->body,
+					    &expr_collect_accesses, &data) < 0)
+			data.accesses = isl_union_map_free(data.accesses);
+	}
 
 	isl_union_set_free(data.domain);
 
