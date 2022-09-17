@@ -16,7 +16,8 @@ LIB_ISL = $(ISL_LA) @ISL_LIBS@
 
 lib_LTLIBRARIES = libpet.la
 bin_PROGRAMS = @extra_bin_programs@
-noinst_PROGRAMS = @extra_noinst_programs@ pet_codegen pet_check_code
+noinst_PROGRAMS = @extra_noinst_programs@ pet_codegen pet_check_code \
+	pet_loopback
 EXTRA_PROGRAMS = pet pet_scop_cmp
 TESTS = @extra_tests@
 EXTRA_TESTS = pet_test.sh codegen_test.sh
@@ -147,6 +148,13 @@ pet_check_code_LDADD = libpet.la $(LIB_ISL)
 pet_check_code_SOURCES = \
 	dummy.cc \
 	pet_check_code.c
+
+pet_loopback_CFLAGS = $(AM_CFLAGS)
+pet_loopback_LDFLAGS =
+pet_loopback_LDADD = libpet.la $(LIB_ISL)
+pet_loopback_SOURCES = \
+	dummy.cc \
+	pet_loopback.c
 
 if HAVE_ISL_BUILDDIR
 # dummy library that captures the dependencies on all headers

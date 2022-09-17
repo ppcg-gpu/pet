@@ -53,8 +53,9 @@ Compilation:
 
 Use:
 
-The main entry point is pet_scop_extract_from_C_source.
-This function extracts a scop from the C source file with the given name
+The main entry points are pet_scop_extract_from_C_source and
+pet_transform_C_source.
+The first function extracts a scop from the C source file with the given name
 and returns it as a pet_scop.  The scop corresponds to the piece
 of code delimited by
 
@@ -69,12 +70,17 @@ if statements and for statements.  All access relations and loop initializations
 need to be piecewise quasi-affine.  Conditions are allowed to be non-affine,
 in which case a separate statement is constructed to evaluate the condition.
 
+The second function (pet_transform_C_source) iterates over all scops.
+
 If the autodetect option has been set, pet will try to automatically
 detect a scop and no pragmas are required.  On the other hand, pet
 will not produce any warnings in this case as any code that does not
 satisfy the requirements is considered to lie outside of the scop.
 
 The layout of pet_scop is documented in include/pet.h.
+
+An example application is given by pet_loopback.c,
+which prints out code from the pet_scop without any transformation.
 
 
 New releases are announced on http://groups.google.com/group/isl-announce
