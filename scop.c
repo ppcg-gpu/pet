@@ -2483,7 +2483,7 @@ static int expr_collect_accesses(__isl_keep pet_expr *expr, void *user)
  * or pet_expr_access_killed), then we only add the accesses that are
  * definitely performed.  Otherwise, we add all potential accesses.
  * In particular, if the statement has any arguments, then if we are looking
- * for definite accesses we currently skip the statement completely.  Othewise,
+ * for definite accesses we currently skip the statement completely.  Otherwise,
  * we project out the values of the statement arguments.
  * If the statement body is not an expression tree, then we cannot
  * know for sure if/when the accesses inside the tree are performed.
