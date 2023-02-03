@@ -36,6 +36,7 @@
 #include <isl/id_to_id.h>
 #include <isl/options.h>
 #include <isl/printer.h>
+#include <isl/val.h>
 
 #include <pet.h>
 
