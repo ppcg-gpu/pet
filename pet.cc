@@ -50,7 +50,11 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/MemoryBuffer.h>
+#ifdef HAVE_TARGETPARSER_HOST_H
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 #include <clang/Basic/Version.h>
 #include <clang/Basic/Builtins.h>
 #include <clang/Basic/FileSystemOptions.h>
