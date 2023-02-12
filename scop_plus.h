@@ -11,7 +11,7 @@
 /* Compare two sequences of identifiers based on their names.
  */
 struct array_desc_less {
-	bool operator()(isl_id_list *x, isl_id_list *y) {
+	bool operator()(isl_id_list *x, isl_id_list *y) const {
 		int x_n = isl_id_list_n_id(x);
 		int y_n = isl_id_list_n_id(y);
 
