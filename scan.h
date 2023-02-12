@@ -71,7 +71,7 @@ struct Independent {
  */
 struct less_name {
 	bool operator()(const clang::TypeDecl *x,
-			const clang::TypeDecl *y) {
+			const clang::TypeDecl *y) const {
 		return x->getNameAsString().compare(y->getNameAsString()) < 0;
 	}
 };
