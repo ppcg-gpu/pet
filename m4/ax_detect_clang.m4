@@ -50,9 +50,10 @@ fi
 CLANG_PREFIX=`$LLVM_CONFIG --prefix`
 AC_DEFINE_UNQUOTED(CLANG_PREFIX, ["$CLANG_PREFIX"], [Clang installation prefix])
 
+AC_LANG_PUSH(C++)
+
 SAVE_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CLANG_CXXFLAGS -I$srcdir $CPPFLAGS"
-AC_LANG_PUSH(C++)
 AC_CHECK_HEADER([clang/Basic/SourceLocation.h], [],
 	[AC_MSG_ERROR([clang header file not found])])
 AC_CHECK_HEADER([llvm/TargetParser/Host.h],
@@ -263,7 +264,6 @@ AC_EGREP_HEADER([ext_implicit_function_decl_c99],
 	[AC_DEFINE([ext_implicit_function_decl_c99],
 	[ext_implicit_function_decl],
 	[Define to ext_implicit_function_decl for older versions of clang])])
-AC_LANG_POP
 CPPFLAGS="$SAVE_CPPFLAGS"
 
 SAVE_LDFLAGS="$LDFLAGS"
@@ -285,4 +285,6 @@ else
 fi
 
 LDFLAGS="$SAVE_LDFLAGS"
+
+AC_LANG_POP
 ])
