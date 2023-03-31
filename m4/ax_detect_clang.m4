@@ -16,6 +16,10 @@ CLANG_CXXFLAGS=`$LLVM_CONFIG --cxxflags | \
 	     -e 's/-gsplit-dwarf//' \
 	     -e 's/-Wl,--no-keep-files-mapped//'`
 CLANG_LDFLAGS=`$LLVM_CONFIG --ldflags`
+# Construct a -R argument for libtool.
+# This is needed in case some of the clang libraries are shared libraries.
+CLANG_RFLAG=`echo "$CLANG_LDFLAGS" | $SED -e 's/-L/-R/g'`
+
 CLANG_VERSION=`$LLVM_CONFIG --version`
 CLANG_LIB="LLVM-$CLANG_VERSION"
 
@@ -27,10 +31,6 @@ LDFLAGS="$SAVE_LDFLAGS"
 # Use single libLLVM shared library when available.
 # Otherwise, try and figure out all the required libraries
 if test "$have_lib_llvm" = yes; then
-	# Construct a -R argument for libtool.
-	# This is apparently required to ensure that libpet.so
-	# keeps track of the location where libLLVM can be found.
-	CLANG_RFLAG=`echo "$CLANG_LDFLAGS" | $SED -e 's/-L/-R/g'`
 	CLANG_LIBS="-l$CLANG_LIB"
 else
 	targets=`$LLVM_CONFIG --targets-built`
