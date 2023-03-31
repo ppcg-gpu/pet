@@ -53,6 +53,8 @@ AC_DEFINE_UNQUOTED(CLANG_PREFIX, ["$CLANG_PREFIX"], [Clang installation prefix])
 AC_LANG_PUSH(C++)
 
 SAVE_CPPFLAGS="$CPPFLAGS"
+SAVE_LDFLAGS="$LDFLAGS"
+
 CPPFLAGS="$CLANG_CXXFLAGS -I$srcdir $CPPFLAGS"
 AC_CHECK_HEADER([clang/Basic/SourceLocation.h], [],
 	[AC_MSG_ERROR([clang header file not found])])
@@ -264,9 +266,7 @@ AC_EGREP_HEADER([ext_implicit_function_decl_c99],
 	[AC_DEFINE([ext_implicit_function_decl_c99],
 	[ext_implicit_function_decl],
 	[Define to ext_implicit_function_decl for older versions of clang])])
-CPPFLAGS="$SAVE_CPPFLAGS"
 
-SAVE_LDFLAGS="$LDFLAGS"
 LDFLAGS="$CLANG_LDFLAGS $LDFLAGS"
 
 # Use single libclang-cpp shared library when available.
@@ -284,6 +284,7 @@ else
 	CLANG_LIBS="-lclangFrontend -lclangSerialization $CLANG_LIBS"
 fi
 
+CPPFLAGS="$SAVE_CPPFLAGS"
 LDFLAGS="$SAVE_LDFLAGS"
 
 AC_LANG_POP
