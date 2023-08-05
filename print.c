@@ -205,7 +205,7 @@ static __isl_give isl_multi_pw_aff *parametrize_nested_exprs(
 	return isl_multi_pw_aff_pullback_multi_aff(index, ma);
 }
 
-static __isl_give isl_ast_expr *pet_expr_build_ast_expr(
+static __isl_give isl_ast_expr *pet_expr_access_build_ast_expr(
 	__isl_keep pet_expr *expr, struct pet_build_ast_expr_data *data);
 
 /* Construct an associative array from identifiers for the nested
@@ -234,7 +234,7 @@ static __isl_give isl_id_to_ast_expr *pet_expr_build_nested_ast_exprs(
 			continue;
 
 		id = isl_id_alloc(ctx, NULL, expr->args[i]);
-		ast_expr = pet_expr_build_ast_expr(expr->args[i], data);
+		ast_expr = pet_expr_access_build_ast_expr(expr->args[i], data);
 		id2expr = isl_id_to_ast_expr_set(id2expr, id, ast_expr);
 	}
 
@@ -257,7 +257,7 @@ static __isl_give isl_id_to_ast_expr *pet_expr_build_nested_ast_exprs(
  * Finally, we apply an AST transformation on the result, if any was provided
  * by the user.
  */
-static __isl_give isl_ast_expr *pet_expr_build_ast_expr(
+static __isl_give isl_ast_expr *pet_expr_access_build_ast_expr(
 	__isl_keep pet_expr *expr, struct pet_build_ast_expr_data *data)
 {
 	isl_pw_aff *pa;
@@ -309,7 +309,7 @@ static int add_access(__isl_keep pet_expr *expr, void *user)
 	isl_id *id;
 	isl_ast_expr *ast_expr;
 
-	ast_expr = pet_expr_build_ast_expr(expr, data);
+	ast_expr = pet_expr_access_build_ast_expr(expr, data);
 
 	id = isl_id_copy(expr->acc.ref_id);
 	data->ref2expr = isl_id_to_ast_expr_set(data->ref2expr, id, ast_expr);
