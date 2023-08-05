@@ -124,7 +124,7 @@ struct PetScan {
 	 */
 	std::map<const clang::Type *, pet_expr *> type_size;
 
-	/* A cache of funtion summaries for function declarations
+	/* A cache of function summaries for function declarations
 	 * as extracted by PetScan::get_summary.
 	 */
 	std::map<clang::FunctionDecl *, pet_function_summary *> summary_cache;
