@@ -2435,10 +2435,13 @@ __isl_give pet_function_summary *PetScan::get_summary_from_tree(
 	return summary;
 }
 
-/* Extract a function summary from the body of "fd".
+/* Extract a function summary from the body of "fd", if possible.
+ * Return this->no_summary if the body cannot be fully analyzed.
  *
- * We turn off autodetection (in case it was set) to ensure that
- * the entire function body is considered.
+ * Turn on autodetection to avoid printing warnings
+ * if the body cannot be fully analyzed,
+ * but return this->no_summary if the extracted pet_tree only
+ * represents part of the function body.
  * The function body is allowed to have a return statement at the end.
  *
  * The result is stored in the summary_cache cache so that we can reuse
@@ -2455,7 +2458,7 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 		return pet_function_summary_copy(summary_cache[fd]);
 
 	save_autodetect = options->autodetect;
-	options->autodetect = 0;
+	options->autodetect = 1;
 	PetScan body_scan(PP, ast_context, fd, loc, options,
 				isl_union_map_copy(value_bounds), independent);
 
@@ -2463,13 +2466,18 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 	tree = body_scan.extract(fd->getBody(), false);
 	options->autodetect = save_autodetect;
 
+	if (body_scan.partial) {
+		pet_tree_free(tree);
+		return cache_summary(fd, pet_function_summary_copy(no_summary));
+	}
+
 	summary = get_summary_from_tree(tree, fd, body_scan);
 
 	return cache_summary(fd, summary);
 }
 
-/* If "fd" has a function body, then extract a function summary from
- * this body and attach it to the call expression "expr".
+/* If "fd" has a function body, then try and extract a function summary from
+ * this body and, if successful, attach it to the call expression "expr".
  *
  * Even if a function body is available, "fd" itself may point
  * to a declaration without function body.  We therefore first
@@ -2487,6 +2495,10 @@ __isl_give pet_expr *PetScan::set_summary(__isl_take pet_expr *expr,
 		return expr;
 
 	summary = get_summary(fd);
+	if (summary == no_summary) {
+		pet_function_summary_free(summary);
+		return expr;
+	}
 
 	expr = pet_expr_call_set_summary(expr, summary);
 
