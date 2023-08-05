@@ -2323,43 +2323,34 @@ static struct pet_array *extract_array(__isl_keep pet_expr *access,
 	return array;
 }
 
-/* Extract a function summary from the body of "fd".
+/* Extract a function summary from the body of "fd",
+ * with pet_tree representation "tree", extracted using "body_scan".
  *
  * We extract a scop from the function body in a context with as
  * parameters the integer arguments of the function.
- * We turn off autodetection (in case it was set) to ensure that
- * the entire function body is considered.
  * We then collect the accessed array elements and attach them
  * to the corresponding array arguments, taking into account
  * that the function body may access members of array elements.
- * The function body is allowed to have a return statement at the end.
  *
  * The reason for representing the integer arguments as parameters in
  * the context is that if we were to instead start with a context
  * with the function arguments as initial dimensions, then we would not
  * be able to refer to them from the array extents, without turning
  * array extents into maps.
- *
- * The result is stored in the summary_cache cache so that we can reuse
- * it if this method gets called on the same function again later on.
  */
-__isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
+__isl_give pet_function_summary *PetScan::get_summary_from_tree(
+	__isl_take pet_tree *tree, clang::FunctionDecl *fd,
+	PetScan &body_scan)
 {
 	isl_space *space;
 	isl_set *domain;
 	pet_context *pc;
-	pet_tree *tree;
 	pet_function_summary *summary;
 	unsigned n;
-	ScopLoc loc;
-	int save_autodetect;
 	struct pet_scop *scop;
 	int int_size;
 	isl_union_set *may_read, *may_write, *must_write;
 	isl_union_map *to_inner;
-
-	if (summary_cache.find(fd) != summary_cache.end())
-		return pet_function_summary_copy(summary_cache[fd]);
 
 	space = isl_space_set_alloc(ctx, 0, 0);
 
@@ -2378,14 +2369,6 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 						isl_id_copy(id));
 		summary = pet_function_summary_set_int(summary, i, id);
 	}
-
-	save_autodetect = options->autodetect;
-	options->autodetect = 0;
-	PetScan body_scan(PP, ast_context, fd, loc, options,
-				isl_union_map_copy(value_bounds), independent);
-
-	body_scan.return_root = fd->getBody();
-	tree = body_scan.extract(fd->getBody(), false);
 
 	domain = isl_set_universe(space);
 	pc = pet_context_alloc(domain);
@@ -2435,8 +2418,40 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 	isl_union_set_free(must_write);
 	isl_union_map_free(to_inner);
 
-	options->autodetect = save_autodetect;
 	pet_context_free(pc);
+
+	return summary;
+}
+
+/* Extract a function summary from the body of "fd".
+ *
+ * We turn off autodetection (in case it was set) to ensure that
+ * the entire function body is considered.
+ * The function body is allowed to have a return statement at the end.
+ *
+ * The result is stored in the summary_cache cache so that we can reuse
+ * it if this method gets called on the same function again later on.
+ */
+__isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
+{
+	pet_tree *tree;
+	pet_function_summary *summary;
+	ScopLoc loc;
+	int save_autodetect;
+
+	if (summary_cache.find(fd) != summary_cache.end())
+		return pet_function_summary_copy(summary_cache[fd]);
+
+	save_autodetect = options->autodetect;
+	options->autodetect = 0;
+	PetScan body_scan(PP, ast_context, fd, loc, options,
+				isl_union_map_copy(value_bounds), independent);
+
+	body_scan.return_root = fd->getBody();
+	tree = body_scan.extract(fd->getBody(), false);
+	options->autodetect = save_autodetect;
+
+	summary = get_summary_from_tree(tree, fd, body_scan);
 
 	summary_cache[fd] = pet_function_summary_copy(summary);
 

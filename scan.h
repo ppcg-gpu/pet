@@ -266,6 +266,9 @@ private:
 		clang::FunctionDecl *fd);
 
 	__isl_give pet_expr *extract_assume(clang::Expr *expr);
+	__isl_give pet_function_summary *get_summary_from_tree(
+		__isl_take pet_tree *tree, clang::FunctionDecl *fd,
+		PetScan &body_scan);
 	__isl_give pet_function_summary *get_summary(clang::FunctionDecl *fd);
 	__isl_give pet_expr *set_summary(__isl_take pet_expr *expr,
 		clang::FunctionDecl *fd);
