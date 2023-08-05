@@ -205,7 +205,7 @@ static __isl_give isl_multi_pw_aff *parametrize_nested_exprs(
 	return isl_multi_pw_aff_pullback_multi_aff(index, ma);
 }
 
-static __isl_give isl_ast_expr *pet_expr_access_build_ast_expr(
+static __isl_give isl_ast_expr *pet_expr_build_ast_expr(
 	__isl_keep pet_expr *expr, struct pet_build_ast_expr_data *data);
 
 /* Construct an associative array from identifiers for the nested
@@ -234,7 +234,7 @@ static __isl_give isl_id_to_ast_expr *pet_expr_build_nested_ast_exprs(
 			continue;
 
 		id = isl_id_alloc(ctx, NULL, expr->args[i]);
-		ast_expr = pet_expr_access_build_ast_expr(expr->args[i], data);
+		ast_expr = pet_expr_build_ast_expr(expr->args[i], data);
 		id2expr = isl_id_to_ast_expr_set(id2expr, id, ast_expr);
 	}
 
@@ -297,6 +297,82 @@ static __isl_give isl_ast_expr *pet_expr_access_build_ast_expr(
 					    data->user_index);
 
 	return ast_expr;
+}
+
+/* A type representing a binary operation on objects of type isl_ast_expr.
+ */
+typedef __isl_give isl_ast_expr *(*binary_ast_op_t)(
+	__isl_take isl_ast_expr *expr1, __isl_take isl_ast_expr *expr2);
+
+/* For the supported binary operations, the corresponding function
+ * performing the operation on objects of type isl_ast_expr.
+ */
+static binary_ast_op_t binary_ast_op[] = {
+	[pet_op_add] = &isl_ast_expr_add,
+	[pet_op_sub] = &isl_ast_expr_sub,
+	[pet_op_last] = NULL,
+};
+
+/* Try and construct an AST expression from an operation expression.
+ *
+ * Only some binary operations are currently supported.
+ */
+static __isl_give isl_ast_expr *pet_expr_op_build_ast_expr(
+	__isl_keep pet_expr *expr, struct pet_build_ast_expr_data *data)
+{
+	isl_ast_expr *lhs, *rhs;
+	binary_ast_op_t ast_op;
+
+	if (!expr)
+		return NULL;
+	if (expr->type != pet_expr_op)
+		isl_die(pet_expr_get_ctx(expr), isl_error_invalid,
+			"not an operation expression", return NULL);
+
+	ast_op = binary_ast_op[expr->op];
+	if (!ast_op)
+		isl_die(pet_expr_get_ctx(expr), isl_error_unsupported,
+			"unsupported operation type", return NULL);
+
+	lhs = pet_expr_build_ast_expr(expr->args[pet_bin_lhs], data);
+	rhs = pet_expr_build_ast_expr(expr->args[pet_bin_rhs], data);
+	return ast_op(lhs, rhs);
+}
+
+/* Try and construct an AST expression from an expression.
+ *
+ * Only some types of expressions are currently supported,
+ * - integer values
+ * - access expressions
+ * - (some) operation expressions.
+ */
+static __isl_give isl_ast_expr *pet_expr_build_ast_expr(
+	__isl_keep pet_expr *expr, struct pet_build_ast_expr_data *data)
+{
+	if (!expr)
+		return NULL;
+
+	switch (expr->type) {
+	case pet_expr_error:
+		return NULL;
+	case pet_expr_int:
+		return isl_ast_expr_from_val(isl_val_copy(expr->i));
+	case pet_expr_double:
+		isl_die(pet_expr_get_ctx(expr), isl_error_unsupported,
+			"unsupported expression type", return NULL);
+	case pet_expr_access:
+		return pet_expr_access_build_ast_expr(expr, data);
+	case pet_expr_op:
+		return pet_expr_op_build_ast_expr(expr, data);
+	case pet_expr_call:
+		isl_die(pet_expr_get_ctx(expr), isl_error_unsupported,
+			"unsupported expression type", return NULL);
+	case pet_expr_cast:
+		isl_die(pet_expr_get_ctx(expr), isl_error_unsupported,
+			"unsupported expression type", return NULL);
+	}
+
+	return NULL;
 }
 
 /* Construct an AST expression from the access expression "expr" and
