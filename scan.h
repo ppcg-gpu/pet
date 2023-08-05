@@ -124,6 +124,9 @@ struct PetScan {
 	 */
 	std::map<const clang::Type *, pet_expr *> type_size;
 
+	/* A dummy summary indicating that no summary could be constructed.
+	 */
+	pet_function_summary *no_summary;
 	/* A cache of function summaries for function declarations
 	 * as extracted by PetScan::get_summary.
 	 */
@@ -174,6 +177,7 @@ struct PetScan {
 		ast_context(ast_context), decl_context(decl_context), loc(loc),
 		ctx(isl_union_map_get_ctx(value_bounds)),
 		options(options), return_root(NULL), partial(false),
+		no_summary(pet_function_summary_alloc(ctx, 0)),
 		value_bounds(value_bounds), last_line(0), current_line(0),
 		independent(independent), n_rename(0),
 		declared_names_collected(false), call2id(NULL),

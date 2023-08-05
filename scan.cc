@@ -200,6 +200,7 @@ PetScan::~PetScan()
 
 	for (it = type_size.begin(); it != type_size.end(); ++it)
 		pet_expr_free(it->second);
+	pet_function_summary_free(no_summary);
 	for (it_s = summary_cache.begin(); it_s != summary_cache.end(); ++it_s)
 		pet_function_summary_free(it_s->second);
 
