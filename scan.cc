@@ -2323,6 +2323,17 @@ static struct pet_array *extract_array(__isl_keep pet_expr *access,
 	return array;
 }
 
+/* Store (a copy of) "summary" in the cache of function summaries
+ * for function declaration "fd" and then give it back to the caller.
+ */
+__isl_give pet_function_summary *PetScan::cache_summary(clang::FunctionDecl *fd,
+	__isl_take pet_function_summary *summary)
+{
+	summary_cache[fd] = pet_function_summary_copy(summary);
+
+	return summary;
+}
+
 /* Extract a function summary from the body of "fd",
  * with pet_tree representation "tree", extracted using "body_scan".
  *
@@ -2453,9 +2464,7 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 
 	summary = get_summary_from_tree(tree, fd, body_scan);
 
-	summary_cache[fd] = pet_function_summary_copy(summary);
-
-	return summary;
+	return cache_summary(fd, summary);
 }
 
 /* If "fd" has a function body, then extract a function summary from
