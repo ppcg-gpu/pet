@@ -33,6 +33,7 @@
 
 #include <string.h>
 
+#include "clang_compatibility.h"
 #include "id.h"
 
 using namespace clang;
@@ -141,7 +142,7 @@ static bool is_vla_with_static_size(QualType T)
 	if (!T->isVariableArrayType())
 		return false;
 	vlatype = cast<VariableArrayType>(T);
-	return vlatype->getSizeModifier() == VariableArrayType::Static;
+	return vlatype->getSizeModifier() == ArraySizeModifier::Static;
 }
 
 /* Return the type of the variable represented by "id" as an array.

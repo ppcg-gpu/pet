@@ -267,6 +267,11 @@ AC_EGREP_HEADER([ext_implicit_function_decl_c99],
 	[AC_DEFINE([ext_implicit_function_decl_c99],
 	[ext_implicit_function_decl],
 	[Define to ext_implicit_function_decl for older versions of clang])])
+# llvmorg-18-init-10186-g49fd28d9601d
+AC_EGREP_HEADER([^enum.*ArraySizeModifier],
+		[clang/AST/Type.h], [],
+	[AC_DEFINE([USE_NESTED_ARRAY_SIZE_MODIFIER], [],
+	 [Define if ArraySizeModifier appears inside ArrayType])])
 
 LDFLAGS="$CLANG_LDFLAGS $LDFLAGS"
 

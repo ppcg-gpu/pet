@@ -3,6 +3,8 @@
 
 #include "config.h"
 
+#include <clang/AST/Type.h>
+
 #ifdef HAVE_BEGIN_END_LOC
 template <typename T>
 inline clang::SourceLocation begin_loc(T *decl)
@@ -25,6 +27,10 @@ inline clang::SourceLocation end_loc(T *decl)
 {
 	return decl->getLocEnd();
 }
+#endif
+
+#ifdef USE_NESTED_ARRAY_SIZE_MODIFIER
+using ArraySizeModifier = clang::ArrayType::ArraySizeModifier;
 #endif
 
 #endif

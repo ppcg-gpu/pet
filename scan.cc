@@ -2749,7 +2749,7 @@ __isl_give pet_expr *PetScan::set_upper_bounds(__isl_take pet_expr *expr,
 	qt = qt->getCanonicalTypeInternal();
 	atype = cast<ArrayType>(qt.getTypePtr());
 
-	if (decayed && atype->getSizeModifier() != ArrayType::Static) {
+	if (decayed && atype->getSizeModifier() != ArraySizeModifier::Static) {
 		qt = atype->getElementType();
 		return set_upper_bounds(expr, qt, pos + 1);
 	}
