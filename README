@@ -18,8 +18,9 @@ Requirements:
 	from source, make sure you also install LLVM
 	(through "make install").  You may want to specify an installation
 	directory using the CMAKE_INSTALL_PREFIX cmake option.
-	You may also want to set the LLVM_BUILD_LLVM_DYLIB option
-	to enable the creation of a single shared library.
+	You may also want to set the LLVM_BUILD_LLVM_DYLIB and
+	CLANG_LINK_CLANG_DYLIB options to enable the creation of
+	a single shared LLVM and clang-cpp library.
 
 	If you configure older versions of LLVM using cmake, you may end up
 	with clang libraries that have been compiled with -fno-rtti without
@@ -33,6 +34,7 @@ Requirements:
 	version 3.2 (ubuntu raring) or later.
 	Older versions of this package did not include the required libraries.
 	You may also need to install the llvm package for llvm-config.
+	It is also recommended to install the libclang-cpp-dev ubuntu package.
 
 Preparing:
 
