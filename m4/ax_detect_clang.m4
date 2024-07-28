@@ -309,7 +309,7 @@ if test "$have_lib_clang" = yes; then
 else
 	CLANG_LIBS="-lclangDriver -lclangBasic $CLANG_LIBS"
 	CLANG_LIBS="-lclangAnalysis -lclangAST -lclangLex $CLANG_LIBS"
-	LDFLAGS="$CLANG_LDFLAGS $CLANG_LIBS $SAVE_LDFLAGS"
+	LIBS="$CLANG_LIBS $SAVE_LIBS"
 	AC_CHECK_LIB([clangEdit], [main], [LIB_CLANG_EDIT=-lclangEdit], [])
 	CLANG_LIBS="$LIB_CLANG_EDIT $CLANG_LIBS"
 	CLANG_LIBS="-lclangParse -lclangSema $CLANG_LIBS"
