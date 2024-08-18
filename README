@@ -5,9 +5,9 @@ Requirements:
 - gmp (http://gmplib.org/)
 - libyaml (http://pyyaml.org/wiki/LibYAML)
 	(only needed if you want to compile the pet executable)
-- LLVM/clang libraries, 3.5 or higher (http://clang.llvm.org/get_started.html)
+- LLVM/clang libraries, 3.9 or higher (http://clang.llvm.org/get_started.html)
 	Unless you have some other reasons for wanting to use the git version,
-	it's best to install the latest release (16.0).
+	it's best to install the latest release (18.1).
 	The git version occasionally introduces incompatibilities.
 	Nevertheless, if you encounter any such incompatibilities, please
 	report them so that they can be fixed.
