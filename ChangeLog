@@ -1,3 +1,10 @@
+version: 0.11.8
+date: Sun Sep  1 12:11:30 PM CEST 2024
+changes:
+	- allow extraction of function summary to fail
+	- handle some nested operations inside accesses
+	- support recent versions of clang
+---
 version: 0.11.7
 date: Sun Apr  2 10:02:35 AM CEST 2023
 changes:
