@@ -198,6 +198,11 @@ struct PetScan {
 	__isl_give pet_tree *extract_inlined_call(clang::CallExpr *call,
 		clang::FunctionDecl *fd, __isl_keep isl_id *return_id);
 private:
+	/* For each type that has been examined already, is it recursive?
+	 */
+	std::map<const clang::Type *, bool> recursive;
+	bool is_recursive(clang::QualType qt);
+
 	void set_current_stmt(clang::Stmt *stmt);
 	bool is_current_stmt_marked_independent();
 
@@ -328,6 +333,7 @@ private:
 		clang::SourceLocation endscop);
 	void report_unsupported_return(clang::Stmt *stmt);
 	void report_return_not_at_end_of_function(clang::Stmt *stmt);
+	void report_unsupported_recursive_type(clang::Decl *decl);
 };
 
 #endif

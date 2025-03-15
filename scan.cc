@@ -381,6 +381,16 @@ void PetScan::report_return_not_at_end_of_function(Stmt *stmt)
 	report(stmt, id);
 }
 
+/* Report the declaration of a variable with a recursive type.
+ */
+void PetScan::report_unsupported_recursive_type(Decl *decl)
+{
+	DiagnosticsEngine &diag = PP.getDiagnostics();
+	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning,
+				   "unsupported recursive type variable");
+	report(decl, id);
+}
+
 /* Extract an integer from "val", which is assumed to be non-negative.
  */
 static __isl_give isl_val *extract_unsigned(isl_ctx *ctx,
@@ -517,6 +527,8 @@ __isl_give pet_expr *PetScan::extract_index_expr(DeclRefExpr *expr)
  *
  * If "decl" is an enum constant, then we return an integer expression
  * instead, representing the value of the enum constant.
+ *
+ * An access to a variable with a recursive type is not allowed.
  */
 __isl_give pet_expr *PetScan::extract_index_expr(ValueDecl *decl)
 {
@@ -526,6 +538,11 @@ __isl_give pet_expr *PetScan::extract_index_expr(ValueDecl *decl)
 		return extract_expr(cast<EnumConstantDecl>(decl));
 
 	id = pet_id_from_decl(ctx, decl);
+	if (is_recursive(pet_id_get_array_type(id))) {
+		report_unsupported_recursive_type(decl);
+		isl_id_free(id);
+		return NULL;
+	}
 	return pet_id_create_index_expr(id);
 }
 
@@ -3361,6 +3378,70 @@ struct pet_scop *PetScan::scan(FunctionDecl *fd)
 	scop = pet_scop_gist(scop, value_bounds);
 
 	return scop;
+}
+
+namespace {
+
+/* Helper class for detecting recursive types.
+ */
+struct RecursionDetector {
+	/* The current outer types. */
+	std::set<TypeDecl *> outer;
+
+	bool is_recursive(RecordDecl *decl);
+	bool is_recursive(QualType qt);
+};
+
+}
+
+/* Is the type containing the record declaration "decl" recursive?
+ *
+ * If the type appears within its own declaration or
+ * if this holds for any part of any of its fields,
+ * then the type is recursive.
+ */
+bool RecursionDetector::is_recursive(RecordDecl *decl)
+{
+	RecordDecl::field_iterator it;
+
+	if (outer.find(decl) != outer.end())
+		return true;
+
+	outer.insert(decl);
+
+	for (it = decl->field_begin(); it != decl->field_end(); ++it)
+		if (is_recursive(it->getType()))
+			return true;
+
+	outer.erase(decl);
+
+	return false;
+}
+
+/* Is the type containing "qt" recursive?
+ *
+ * If "qt" is a recursive record, then this is the case.
+ */
+bool RecursionDetector::is_recursive(QualType qt)
+{
+	QualType base = pet_clang_base_type(qt);
+
+	if (base->isRecordType())
+		return is_recursive(pet_clang_record_decl(base));
+	return false;
+}
+
+/* Is the type "qt" recursive?
+ *
+ * If this property has been determined before, then reuse the result.
+ */
+bool PetScan::is_recursive(QualType qt)
+{
+	const Type *type = qt.getTypePtr();
+
+	if (recursive.find(type) == recursive.end())
+		recursive[type] = RecursionDetector().is_recursive(qt);
+	return recursive[type];
 }
 
 /* Update this->last_line and this->current_line based on the fact
