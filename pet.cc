@@ -952,9 +952,9 @@ static TargetInfo *create_target_info(CompilerInstance *Clang,
 
 #ifdef CREATEDIAGNOSTICS_TAKES_ARG
 
-static void create_diagnostics(CompilerInstance *Clang)
-{
-	Clang->createDiagnostics(0, NULL);
+static void create_diagnostics(CompilerInstance *Clang) {
+    auto VFS = llvm::vfs::getRealFileSystem();
+    Clang->createDiagnostics(*VFS, nullptr, /*ShouldOwnClient=*/false);
 }
 
 #else
