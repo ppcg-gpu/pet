@@ -35,6 +35,10 @@
 #include <stdio.h>
 #include <isl/arg.h>
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+#include "debug_hooks.h"
+#endif
+
 #include "scop.h"
 #include "scop_yaml.h"
 
@@ -62,6 +66,10 @@ int main(int argc, char **argv)
 	FILE *file1, *file2;
 	int equal;
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_init();
+#endif
+
 	options = options_new_with_defaults();
 	assert(options);
 	argc = options_parse(options, argc, argv, ISL_ARG_ALL);
@@ -83,6 +91,10 @@ int main(int argc, char **argv)
 	fclose(file2);
 	fclose(file1);
 	isl_ctx_free(ctx);
+
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_cleanup();
+#endif
 
 	return equal >= 0 && equal ? 0 : 1;
 }

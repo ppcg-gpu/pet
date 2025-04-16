@@ -796,8 +796,6 @@ struct MyDiagnosticPrinter : public TextDiagnosticPrinter {
 	}
 };
 
-#ifdef USE_ARRAYREF
-
 #ifdef HAVE_CXXISPRODUCTION
 static Driver *construct_driver(const char *binary, DiagnosticsEngine &Diags)
 {
@@ -822,6 +820,8 @@ static Driver *construct_driver(const char *binary, DiagnosticsEngine &Diags)
 	return new Driver(binary, llvm::sys::getDefaultTargetTriple(), Diags);
 }
 #endif
+
+#ifdef USE_ARRAYREF
 
 namespace clang { namespace driver { class Job; } }
 
@@ -953,7 +953,9 @@ static TargetInfo *create_target_info(CompilerInstance *Clang,
 #ifdef CREATEDIAGNOSTICS_TAKES_ARG
 
 static void create_diagnostics(CompilerInstance *Clang) {
-    auto VFS = llvm::vfs::getRealFileSystem();
+    // Use a static VFS to ensure it exists for the lifetime of the program
+    // This prevents the VFS from being destroyed when this function returns
+    static IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = llvm::vfs::getRealFileSystem();
     Clang->createDiagnostics(*VFS, nullptr, /*ShouldOwnClient=*/false);
 }
 
@@ -1003,7 +1005,8 @@ void add_path(HeaderSearchOptions &HSO, string Path)
 template <typename T>
 static void create_main_file_id(SourceManager &SM, const T &file)
 {
-	SM.setMainFileID(SM.createFileID(file, SourceLocation(),
+    SourceLocation SL;
+	SM.setMainFileID(SM.createFileID(file, SL,
 					SrcMgr::C_User));
 }
 
@@ -1034,8 +1037,11 @@ static void set_lang_defaults(CompilerInstance *Clang)
 
 static void set_lang_defaults(CompilerInstance *Clang)
 {
-	CompilerInvocation::setLangDefaults(Clang->getLangOpts(), IK_C,
-					    LangStandard::lang_unspecified);
+    PreprocessorOptions &PO = Clang->getPreprocessorOpts();
+    TargetOptions &TO = Clang->getTargetOpts();
+    llvm::Triple T(TO.Triple);
+	CompilerInvocation::setLangDefaults(Clang->getLangOpts(), IK_C, T,
+					    PO);
 }
 
 #endif
@@ -1232,11 +1238,43 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 
 	ScopLocList scops;
 
-	auto file = getFile(Clang->getFileManager(), filename);
-	if (!file)
-		isl_die(ctx, isl_error_unknown, "unable to open file",
+	// Safer file handling for Clang 20+
+	SourceManager &SM = Clang->getSourceManager();
+	FileManager &FM = Clang->getFileManager();
+	
+	// Check filename validity first
+	if (!filename || filename[0] == '\0') {
+		isl_die(ctx, isl_error_unknown, "invalid filename",
 			do { delete Clang; return isl_stat_error; } while (0));
-	create_main_file_id(Clang->getSourceManager(), *file);
+	}
+	
+	try {
+		// For Clang 20, we use FileEntryRef API exclusively
+		llvm::StringRef filenameRef(filename);
+		
+		// Get file entry explicitly checking for errors
+		auto fileOpt = FM.getFileRef(filenameRef);
+		if (!fileOpt) {
+			std::string errMsg = "unable to open file: ";
+			errMsg += filename;
+			isl_die(ctx, isl_error_unknown, errMsg.c_str(),
+				do { delete Clang; return isl_stat_error; } while (0));
+		}
+		
+		// Create file ID with explicit validity check
+		FileID FID = SM.createFileID(*fileOpt, SourceLocation(), SrcMgr::C_User);
+		if (!FID.isValid()) {
+			std::string errMsg = "unable to create file ID for: ";
+			errMsg += filename;
+			isl_die(ctx, isl_error_unknown, errMsg.c_str(),
+				do { delete Clang; return isl_stat_error; } while (0));
+		}
+		
+		SM.setMainFileID(FID);
+	} catch (const std::exception &e) {
+		isl_die(ctx, isl_error_unknown, e.what(),
+			do { delete Clang; return isl_stat_error; } while (0));
+	}
 
 	Clang->createASTContext();
 	PetASTConsumer consumer(ctx, PP, Clang->getASTContext(), Diags,
