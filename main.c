@@ -35,6 +35,10 @@
 #include <isl/ctx.h>
 #include <isl/options.h>
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+#include "debug_hooks.h"
+#endif
+
 #include "options.h"
 #include "scop.h"
 #include "scop_yaml.h"
@@ -59,6 +63,10 @@ int main(int argc, char *argv[])
 	struct pet_scop *scop;
 	struct options *options;
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_init();
+#endif
+
 	options = options_new_with_defaults();
 	ctx = isl_ctx_alloc_with_options(&options_args, options);
 	argc = options_parse(options, argc, argv, ISL_ARG_ALL);
@@ -71,5 +79,10 @@ int main(int argc, char *argv[])
 	pet_scop_free(scop);
 
 	isl_ctx_free(ctx);
+
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_cleanup();
+#endif
+
 	return 0;
 }

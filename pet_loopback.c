@@ -40,6 +40,10 @@
 
 #include <pet.h>
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+#include "debug_hooks.h"
+#endif
+
 /* The command line options of this example application.
  *
  * "isl" and "pet" are the isl and pet command line options.
@@ -468,6 +472,10 @@ int main(int argc, char *argv[])
 	struct options *options;
 	int r;
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_init();
+#endif
+
 	options = options_new_with_defaults();
 	ctx = isl_ctx_alloc_with_options(&options_args, options);
 	isl_options_set_ast_print_macro_once(ctx, 1);
@@ -478,5 +486,10 @@ int main(int argc, char *argv[])
 		&transform, NULL);
 
 	isl_ctx_free(ctx);
+
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_cleanup();
+#endif
+
 	return r;
 }

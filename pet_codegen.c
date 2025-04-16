@@ -41,6 +41,10 @@
 #include <isl/union_set.h>
 #include <isl/schedule_node.h>
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+#include "debug_hooks.h"
+#endif
+
 struct options {
 	struct isl_options	*isl;
 	unsigned		 tree;
@@ -368,6 +372,10 @@ int main(int argc, char **argv)
 	struct options *options;
 	int r;
 
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_init();
+#endif
+
 	options = options_new_with_defaults();
 	assert(options);
 	argc = options_parse(options, argc, argv, ISL_ARG_ALL);
@@ -380,5 +388,10 @@ int main(int argc, char **argv)
 		r = print_schedule_map(ctx, options);
 
 	isl_ctx_free(ctx);
-	return r;
+
+#ifdef PET_ENABLE_DEBUG_HOOKS
+    pet_debug_hooks_cleanup();
+#endif
+
+    return r;
 }

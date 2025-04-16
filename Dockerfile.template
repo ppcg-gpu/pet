@@ -1,0 +1,51 @@
+ARG LLVM_VERSION
+ARG CMAKE_BUILD_TYPE
+ARG PET_ENABLE_DEBUG_HOOKS
+ARG CTEST_VERBOSE
+
+FROM ubuntu:22.04
+
+ARG LLVM_VERSION
+ARG CMAKE_BUILD_TYPE
+ARG PET_ENABLE_DEBUG_HOOKS
+ARG CTEST_VERBOSE
+
+# Update package lists and install the necessary tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common ca-certificates gpg wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# For LLVM 13 and above, use the LLVM repository
+# For LLVM 11 and 12, use Ubuntu standard repositories
+RUN if [ "${LLVM_VERSION}" -ge "13" ]; then \
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc && \
+        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.list; \
+    fi
+
+# Install required tools.
+RUN apt-get -qq update && \
+    apt-get -qq --no-install-recommends install vim git ca-certificates \
+    automake autoconf libtool make cmake pkg-config libgmp3-dev libyaml-dev \
+    opencl-c-headers ocl-icd-opencl-dev clinfo libpocl-dev pocl-opencl-icd clinfo \
+    clang-${LLVM_VERSION} libclang-${LLVM_VERSION}-dev libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN ln -s /usr/bin/llvm-config-${LLVM_VERSION} /usr/bin/llvm-config && \
+    ln -s /usr/bin/clang-${LLVM_VERSION} /usr/bin/clang && \
+    ln -s /usr/bin/clang++-${LLVM_VERSION} /usr/bin/clang++
+    
+COPY . /pet
+WORKDIR /pet
+RUN mkdir build && \
+    cd build && \
+    cmake -DCMAKE_INSTALL_PREFIX=/opt/pet-llvm-${LLVM_VERSION} \
+          -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+          -DPET_ENABLE_DEBUG_HOOKS=${PET_ENABLE_DEBUG_HOOKS} \
+          .. && \
+    cmake --build . -- -j8 && \
+    if [ "${CTEST_VERBOSE}" = "ON" ]; then \
+        ctest -V; \
+    else \
+        ctest; \
+    fi && \
+    cmake --install .

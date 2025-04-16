@@ -1,3 +1,3 @@
 [submodule "isl"]
-	path = isl
+	path = ThirdParty/isl
 	url = https://github.com/ppcg-gpu/isl.git

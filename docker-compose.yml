@@ -1,0 +1,110 @@
+services:
+  llvm-11:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 11
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-11
+
+  llvm-12:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 12
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-12
+
+  llvm-13:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 13
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-13
+
+  llvm-14:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 14
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-14
+
+  llvm-15:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 15
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-15
+
+  llvm-16:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 16
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-16
+
+  llvm-17:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 17
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-17
+
+  llvm-18:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 18
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-18
+
+  llvm-19:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 19
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-19
+
+  llvm-20:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        LLVM_VERSION: 20
+        CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE:-Release}
+        PET_ENABLE_DEBUG_HOOKS: ${PET_ENABLE_DEBUG_HOOKS:-OFF}
+        CTEST_VERBOSE: ${CTEST_VERBOSE:-ON}
+    image: pet:llvm-20
