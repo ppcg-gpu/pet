@@ -62,6 +62,7 @@ configure_file(
 set(PET_SOURCES
   aff.c
   array.c
+  ast_link.cc
   clang.cc
   context.c
   expr.c
@@ -142,6 +143,9 @@ add_pet_program(pet_scop_cmp parse.c pet_scop_cmp.c)
 target_include_directories(pet_scop_cmp PRIVATE ${LIBYAML_INCLUDE_DIRS})
 target_link_libraries(pet_scop_cmp PRIVATE ${LIBYAML_LIBRARIES})
 
+add_pet_program(pet_ast_link pet_ast_link.cc)
+# It reads the Clang headers directly, which pet only links privately.
+target_link_libraries(pet_ast_link PRIVATE clang_feature_tests)
 add_pet_program(pet_codegen pet_codegen.c)
 add_pet_program(pet_check_code pet_check_code.c)
 add_pet_program(pet_loopback pet_loopback.c)
@@ -196,6 +200,27 @@ if(BUILD_TESTING)
 
 # Create a directory for tests if it doesn't exist yet
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_outputs")
+
+#--------------------------------------------------------------------
+# AST linking
+#--------------------------------------------------------------------
+
+# Serialising the corpus needs a compiler that writes the same AST format
+# as the libraries pet is built against.
+find_program(CLANG_EXECUTABLE clang HINTS ${LLVM_TOOLS_BINARY_DIR})
+if(CLANG_EXECUTABLE)
+    add_test(NAME PET_AstLink
+        COMMAND ${CMAKE_COMMAND}
+            -DCLANG=${CLANG_EXECUTABLE}
+            -DLINKER=$<TARGET_FILE:pet_ast_link>
+            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link
+            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link
+            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/expected.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
+    )
+else()
+    message(STATUS "clang not found. The AST linking test will be skipped.")
+endif()
 
 #--------------------------------------------------------------------
 # PET Test Framework
