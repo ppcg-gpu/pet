@@ -109,6 +109,10 @@ int main(int argc, char **argv)
 			++split;
 
 	if (verbose) {
+		int n = pet_linked_ast_n_refused(linked);
+		for (int i = 0; i < n; ++i)
+			printf("refused %s\n",
+				pet_linked_ast_refused(linked, i));
 		for (auto &c : calls.resolved)
 			printf("call %s %s\n", c.first.c_str(),
 				c.second ? "resolved" : "unresolved");

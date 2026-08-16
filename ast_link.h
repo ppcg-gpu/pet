@@ -34,8 +34,15 @@ void pet_ast_link_free(struct pet_linked_ast *linked);
 clang::ASTContext &pet_linked_ast_context(struct pet_linked_ast *linked);
 
 /* The number of declarations that could not be imported.  Anything other
- * than zero means the result is not a faithful link.
+ * than zero means the result is not a faithful link: the declarations are
+ * missing from it, and so is anything that referred to them.
  */
 int pet_linked_ast_n_refused(struct pet_linked_ast *linked);
+
+/* The name of the "i"th declaration that could not be imported, or the
+ * empty string for one that has no name.  Clang reports why on its
+ * diagnostic output as the link proceeds; this says what was lost.
+ */
+const char *pet_linked_ast_refused(struct pet_linked_ast *linked, int i);
 
 #endif

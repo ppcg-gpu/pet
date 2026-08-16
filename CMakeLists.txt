@@ -208,19 +208,55 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_outputs")
 # Serialising the corpus needs a compiler that writes the same AST format
 # as the libraries pet is built against.
 find_program(CLANG_EXECUTABLE clang HINTS ${LLVM_TOOLS_BINARY_DIR})
-if(CLANG_EXECUTABLE)
-    add_test(NAME PET_AstLink
+
+# Link the units of a corpus and check the report against "expected".
+#
+#   name      what the property being checked is called
+#   corpus    directory under tests/ast_link
+#   units     base names, in the order they are linked
+#   expected  the expected report, relative to the corpus
+#   ARGN      "EXPECT_FAIL" when the link is meant to be rejected
+function(add_ast_link_test name corpus units expected)
+    if(NOT CLANG_EXECUTABLE)
+        return()
+    endif()
+    set(expect_fail 0)
+    if("EXPECT_FAIL" IN_LIST ARGN)
+        set(expect_fail 1)
+    endif()
+    list(JOIN units "|" units_arg)
+    add_test(NAME PET_AstLink_${name}
         COMMAND ${CMAKE_COMMAND}
             -DCLANG=${CLANG_EXECUTABLE}
             -DLINKER=$<TARGET_FILE:pet_ast_link>
-            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link
-            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link
-            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/expected.txt
+            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/${corpus}
+            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/${name}
+            "-DUNITS=${units_arg}"
+            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/${corpus}/${expected}
+            -DEXPECT_FAIL=${expect_fail}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
     )
-else()
-    message(STATUS "clang not found. The AST linking test will be skipped.")
+endfunction()
+
+if(NOT CLANG_EXECUTABLE)
+    message(STATUS "clang not found. The AST linking tests will be skipped.")
 endif()
+
+# A call to a function defined in another unit reaches its definition, two
+# static functions sharing a name stay distinct, and the struct described
+# by the shared header becomes one type.
+add_ast_link_test(merge merge "total;scale;sum" expected-all.txt)
+
+# Leaving the units that hold the definitions out is not an error, any
+# more than linking without an object file is: the calls simply stay
+# unresolved.  This is what makes the test above assert something.
+add_ast_link_test(incomplete merge "total" expected-total-only.txt)
+
+# Units that disagree about a type and about the type of a function
+# describe programs that cannot be made into one.  The declarations
+# involved are refused by name and the link is rejected.
+add_ast_link_test(conflict conflict "incompatible_a;incompatible_b"
+    expected.txt EXPECT_FAIL)
 
 #--------------------------------------------------------------------
 # PET Test Framework

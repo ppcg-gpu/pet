@@ -1,4 +1,5 @@
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <clang/AST/ASTImporter.h>
@@ -24,16 +25,17 @@ using namespace clang;
  * unit mentioning the same entity reuses the declaration instead of
  * creating another one.
  *
- * "n_refused" counts the declarations the importer would not accept.
+ * "refused" names the declarations the importer would not accept, which
+ * is how an incompatibility between two units shows up: a function
+ * declared with different types, or a struct defined with different
+ * fields, cannot become one entity.
  */
 struct pet_linked_ast {
 	std::vector<std::unique_ptr<ASTUnit> > units;
 	std::shared_ptr<ASTImporterSharedState> shared;
 	std::shared_ptr<DiagnosticOptions> diag_opts;
 	IntrusiveRefCntPtr<DiagnosticsEngine> diags;
-	int n_refused;
-
-	pet_linked_ast() : n_refused(0) {}
+	std::vector<std::string> refused;
 };
 
 /* Read the translation unit serialised in "file".
@@ -64,7 +66,8 @@ static void link_unit(struct pet_linked_ast *linked, ASTUnit *src)
 		if (res)
 			continue;
 		llvm::consumeError(res.takeError());
-		linked->n_refused++;
+		auto *nd = dyn_cast<NamedDecl>(d);
+		linked->refused.push_back(nd ? nd->getNameAsString() : "");
 	}
 }
 
@@ -117,5 +120,10 @@ clang::ASTContext &pet_linked_ast_context(struct pet_linked_ast *linked)
 
 int pet_linked_ast_n_refused(struct pet_linked_ast *linked)
 {
-	return linked->n_refused;
+	return linked->refused.size();
+}
+
+const char *pet_linked_ast_refused(struct pet_linked_ast *linked, int i)
+{
+	return linked->refused[i].c_str();
 }
