@@ -170,10 +170,22 @@ install(TARGETS pet_exe
 # naming the configured one would send consumers to a different tree.
 set(PET_PC ${CMAKE_CURRENT_BINARY_DIR}/pet.pc)
 install(CODE "
-    set(PKGCONFIG_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")
+    # Baked in here; only the prefix is left to the install script, which is
+    # the one thing cmake --install --prefix can still change.
     set(PROJECT_VERSION \"${PROJECT_VERSION}\")
-    set(CMAKE_INSTALL_LIBDIR \"${CMAKE_INSTALL_LIBDIR}\")
-    set(CMAKE_INSTALL_INCLUDEDIR \"${CMAKE_INSTALL_INCLUDEDIR}\")
+    set(dir_LIB \"${CMAKE_INSTALL_LIBDIR}\")
+    set(dir_INCLUDE \"${CMAKE_INSTALL_INCLUDEDIR}\")
+
+    set(PKGCONFIG_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")
+    foreach(d LIB INCLUDE)
+        # An absolute install directory is not under the prefix, so it must
+        # not be written relative to it.
+        if(IS_ABSOLUTE \"\${dir_\${d}}\")
+            set(PKGCONFIG_\${d}DIR \"\${dir_\${d}}\")
+        else()
+            set(PKGCONFIG_\${d}DIR \"\\\${prefix}/\${dir_\${d}}\")
+        endif()
+    endforeach()
     configure_file(\"${CMAKE_CURRENT_SOURCE_DIR}/cmake/pet.pc.in\" \"${PET_PC}\" @ONLY)
 ")
 install(FILES ${PET_PC} DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
