@@ -1,6 +1,6 @@
 # PET: Polyhedral Extraction Tool
 
-PET with CMake-based build system, can be built for LLVM versions 11...20.
+PET with CMake-based build system, can be built for LLVM versions 11...22.
 
 
 ## Building

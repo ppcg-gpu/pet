@@ -11,6 +11,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(GNUInstallDirs)
 
+# Establish BUILD_TESTING before the subprojects, so that turning testing
+# off reaches all of them.
+include(CTest)
+
 # Keep the installed programs pointing at the libraries in the same prefix.
 if(NOT DEFINED CMAKE_INSTALL_RPATH)
   set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
@@ -24,6 +28,23 @@ if(PET_FORCE_LLVM_VERSION)
 endif()
 
 find_package(LibYAML REQUIRED)
+
+# gitversion.h, reported by pet --version
+execute_process(
+  COMMAND git describe --always --dirty
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE GIT_HEAD_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+  RESULT_VARIABLE GIT_DESCRIBE_RESULT
+)
+if(NOT GIT_DESCRIBE_RESULT EQUAL 0 OR NOT GIT_HEAD_VERSION)
+  set(GIT_HEAD_VERSION "pet-${PROJECT_VERSION}")
+endif()
+file(GENERATE
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gitversion.h
+  CONTENT "#define GIT_HEAD_ID \"${GIT_HEAD_VERSION}\"\n"
+)
 
 # isl is built as part of this project.  It also brings in extract_interface
 # and, with it, the clang_feature_tests target that provides clang_features.h
@@ -143,32 +164,22 @@ install(TARGETS pet_exe
 )
 
 # pkg-config description, as AX_CREATE_PKGCONFIG_INFO used to produce.
-# Everything under the prefix is expressed relative to it; the prefix
-# itself is the one the build was configured with.
-if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
-  set(PKGCONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
-else()
-  set(PKGCONFIG_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
-endif()
-if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
-  set(PKGCONFIG_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
-else()
-  set(PKGCONFIG_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
-endif()
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/pet.pc.in
-  ${CMAKE_CURRENT_BINARY_DIR}/pet.pc
-  @ONLY
-)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/pet.pc
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
-)
+#
+# Written during installation rather than during configuration, because
+# cmake --install --prefix chooses the prefix at that point, and a file
+# naming the configured one would send consumers to a different tree.
+set(PET_PC ${CMAKE_CURRENT_BINARY_DIR}/pet.pc)
+install(CODE "
+    set(PKGCONFIG_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")
+    set(PROJECT_VERSION \"${PROJECT_VERSION}\")
+    set(CMAKE_INSTALL_LIBDIR \"${CMAKE_INSTALL_LIBDIR}\")
+    set(CMAKE_INSTALL_INCLUDEDIR \"${CMAKE_INSTALL_INCLUDEDIR}\")
+    configure_file(\"${CMAKE_CURRENT_SOURCE_DIR}/cmake/pet.pc.in\" \"${PET_PC}\" @ONLY)
+")
+install(FILES ${PET_PC} DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 # Adding PET unit tests for ctest
-# BUILD_TESTING comes from CTest and has to actually switch the tests off,
-# so everything below is registered only when it is on.
-include(CTest)
-
+# Everything below is registered only when testing is on.
 if(BUILD_TESTING)
 
 # Create a directory for tests if it doesn't exist yet

@@ -1,7 +1,7 @@
-prefix=@CMAKE_INSTALL_PREFIX@
+prefix=@PKGCONFIG_PREFIX@
 exec_prefix=${prefix}
-libdir=@PKGCONFIG_LIBDIR@
-includedir=@PKGCONFIG_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
 Name: pet
 Description: Polyhedral Extraction Tool
