@@ -767,9 +767,9 @@ static bool is_implicit(const IdentifierInfo *ident, int pencil)
  * builtins.
  */
 struct MyDiagnosticPrinter : public TextDiagnosticPrinter {
-	const DiagnosticOptions *DiagOpts;
+	DiagnosticOptions *DiagOpts;
 	int pencil;
-#ifdef HAVE_BASIC_DIAGNOSTICOPTIONS_H
+#ifdef TEXTDIAGNOSTICPRINTER_TAKES_POINTER
 	MyDiagnosticPrinter(DiagnosticOptions *DO, int pencil) :
 		TextDiagnosticPrinter(llvm::errs(), DO), pencil(pencil) {}
 	virtual DiagnosticConsumer *clone(DiagnosticsEngine &Diags) const {
@@ -777,8 +777,11 @@ struct MyDiagnosticPrinter : public TextDiagnosticPrinter {
 						pencil);
 	}
 #else
-	MyDiagnosticPrinter(const DiagnosticOptions &DO, int pencil) :
-		DiagOpts(&DO), TextDiagnosticPrinter(llvm::errs(), DO),
+	/* The printer only keeps a reference to the diagnostic options,
+	 * so they need to outlive the printer and cannot be const.
+	 */
+	MyDiagnosticPrinter(DiagnosticOptions &DO, int pencil) :
+		TextDiagnosticPrinter(llvm::errs(), DO), DiagOpts(&DO),
 		pencil(pencil) {}
 	virtual DiagnosticConsumer *clone(DiagnosticsEngine &Diags) const {
 		return new MyDiagnosticPrinter(*DiagOpts, pencil);
@@ -900,7 +903,7 @@ static CompilerInvocation *construct_invocation(const char *filename,
 
 #endif
 
-#ifdef HAVE_BASIC_DIAGNOSTICOPTIONS_H
+#ifdef TEXTDIAGNOSTICPRINTER_TAKES_POINTER
 
 static MyDiagnosticPrinter *construct_printer(CompilerInstance *Clang,
 	int pencil)
@@ -908,14 +911,23 @@ static MyDiagnosticPrinter *construct_printer(CompilerInstance *Clang,
 	return new MyDiagnosticPrinter(new DiagnosticOptions(), pencil);
 }
 
-#else
+#elif defined(TEXTDIAGNOSTICPRINTER_TAKES_REFERENCE)
 
+/* Construct a diagnostic printer.
+ *
+ * The printer only keeps a reference to the diagnostic options,
+ * so they need to outlive the printer.  Those of the compiler instance
+ * do, and they are also the ones the rest of the invocation was
+ * configured with.
+ */
 static MyDiagnosticPrinter *construct_printer(CompilerInstance *Clang,
 	int pencil)
 {
 	return new MyDiagnosticPrinter(Clang->getDiagnosticOpts(), pencil);
 }
 
+#else
+#error "Do not know how to construct a TextDiagnosticPrinter"
 #endif
 
 #ifdef CREATETARGETINFO_TAKES_SHARED_PTR
@@ -938,7 +950,7 @@ static TargetInfo *create_target_info(CompilerInstance *Clang,
 	return TargetInfo::CreateTargetInfo(Diags, &TO);
 }
 
-#else
+#elif defined(CREATETARGETINFO_TAKES_REFERENCE)
 
 static TargetInfo *create_target_info(CompilerInstance *Clang,
 	DiagnosticsEngine &Diags)
@@ -948,6 +960,8 @@ static TargetInfo *create_target_info(CompilerInstance *Clang,
 	return TargetInfo::CreateTargetInfo(Diags, TO);
 }
 
+#else
+#error "Do not know how to create a TargetInfo"
 #endif
 
 #ifdef CREATEDIAGNOSTICS_TAKES_ARG
@@ -966,6 +980,24 @@ static void create_diagnostics(CompilerInstance *Clang)
 	Clang->createDiagnostics();
 }
 
+#endif
+
+#ifdef CREATESOURCEMANAGER_TAKES_FILEMANAGER
+
+static void create_source_manager(CompilerInstance *Clang)
+{
+	Clang->createSourceManager(Clang->getFileManager());
+}
+
+#elif defined(CREATESOURCEMANAGER_TAKES_NOTHING)
+
+static void create_source_manager(CompilerInstance *Clang)
+{
+	Clang->createSourceManager();
+}
+
+#else
+#error "Do not know how to create a SourceManager"
 #endif
 
 #ifdef CREATEPREPROCESSOR_TAKES_TUKIND
@@ -1054,7 +1086,7 @@ static void set_invocation(CompilerInstance *Clang,
 	Clang->setInvocation(std::shared_ptr<CompilerInvocation>(invocation));
 }
 
-#else
+#elif defined(SETINVOCATION_TAKES_POINTER)
 
 static void set_invocation(CompilerInstance *Clang,
 	CompilerInvocation *invocation)
@@ -1062,6 +1094,24 @@ static void set_invocation(CompilerInstance *Clang,
 	Clang->setInvocation(invocation);
 }
 
+#elif defined(INVOCATION_IS_ASSIGNABLE)
+
+/* Install the constructed invocation in the compiler instance.
+ *
+ * The compiler instance owns its invocation and no longer allows
+ * it to be replaced, so overwrite the one it created itself.
+ * Unlike the other cases, the invocation is copied rather than
+ * taken over, so the original has to be freed here.
+ */
+static void set_invocation(CompilerInstance *Clang,
+	CompilerInvocation *invocation)
+{
+	Clang->getInvocation() = *invocation;
+	delete invocation;
+}
+
+#else
+#error "Do not know how to install a CompilerInvocation"
 #endif
 
 /* Helper function for ignore_error that only gets enabled if T
@@ -1194,6 +1244,20 @@ static void set_implicit_function_declaration_no_error(DiagnosticsEngine &Diags)
 }
 #endif
 
+/* Create the diagnostics engine of "Clang" and configure it the way
+ * pet needs it.
+ *
+ * The engine refers to the diagnostic options of the compiler instance,
+ * so it has to be created again whenever those are replaced.
+ */
+static void create_configured_diagnostics(CompilerInstance *Clang)
+{
+	create_diagnostics(Clang);
+	DiagnosticsEngine &Diags = Clang->getDiagnostics();
+	Diags.setSuppressSystemWarnings(true);
+	set_implicit_function_declaration_no_error(Diags);
+}
+
 /* Extract a pet_scop from each function in the C source file called "filename".
  * Each detected scop is passed to "fn".
  * If "function" is not NULL, only extract a pet_scop from the function
@@ -1210,19 +1274,30 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	isl_stat (*fn)(struct pet_scop *scop, void *user), void *user)
 {
 	CompilerInstance *Clang = new CompilerInstance();
-	create_diagnostics(Clang);
-	DiagnosticsEngine &Diags = Clang->getDiagnostics();
-	Diags.setSuppressSystemWarnings(true);
-	set_implicit_function_declaration_no_error(Diags);
-	TargetInfo *target = create_target_info(Clang, Diags);
-	Clang->setTarget(target);
+	create_configured_diagnostics(Clang);
+	/* The language defaults depend on the target triple, while
+	 * the target information keeps a pointer to the target options,
+	 * so it can only be created once the invocation is final.
+	 */
+	Clang->getTargetOpts().Triple = llvm::sys::getDefaultTargetTriple();
 	set_lang_defaults(Clang);
-	CompilerInvocation *invocation = construct_invocation(filename, Diags);
-	if (invocation)
+	CompilerInvocation *invocation =
+		construct_invocation(filename, Clang->getDiagnostics());
+	if (invocation) {
 		set_invocation(Clang, invocation);
+		/* Installing the invocation replaces the options that both
+		 * the diagnostics engine and the target information refer
+		 * to, so neither may have been created before this point.
+		 */
+		create_configured_diagnostics(Clang);
+	}
+	TargetInfo *target = create_target_info(Clang,
+						Clang->getDiagnostics());
+	Clang->setTarget(target);
+	DiagnosticsEngine &Diags = Clang->getDiagnostics();
 	Diags.setClient(construct_printer(Clang, options->pencil));
 	Clang->createFileManager();
-	Clang->createSourceManager(Clang->getFileManager());
+	create_source_manager(Clang);
 	HeaderSearchOptions &HSO = Clang->getHeaderSearchOpts();
 	HSO.ResourceDir = ResourceDir;
 	for (int i = 0; i < options->n_path; ++i)

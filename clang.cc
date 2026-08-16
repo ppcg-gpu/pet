@@ -32,6 +32,7 @@
  * Leiden University.
  */
 
+#include "config.h"
 #include "clang.h"
 
 using namespace clang;
@@ -57,16 +58,19 @@ QualType pet_clang_base_type(QualType qt)
  * or the base type if there is no such typedef type.
  * Do not call getCanonicalTypeInternal as in pet_clang_base_type
  * because that throws away all internal typedef types.
- * Look through any ElaboratedType sugar.
+ * Look through any ElaboratedType sugar, on the versions of clang
+ * that still have it.
  */
 QualType pet_clang_base_or_typedef_type(QualType qt)
 {
 	const Type *type = qt.getTypePtr();
 
+#ifdef HAVE_ELABORATEDTYPE
 	if (isa<ElaboratedType>(type)) {
 		qt = cast<ElaboratedType>(type)->desugar();
 		return pet_clang_base_or_typedef_type(qt);
 	}
+#endif
 	if (isa<TypedefType>(type))
 		return qt;
 	if (type->isPointerType())

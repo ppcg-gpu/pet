@@ -1,77 +1,34 @@
-cmake_minimum_required(VERSION 3.15)
+# file(CHMOD), used by the test framework below, needs 3.19.
+cmake_minimum_required(VERSION 3.19)
 
-project(pet LANGUAGES C CXX)
+project(pet VERSION 0.11.8 LANGUAGES C CXX)
 
 option(PET_ENABLE_DEBUG_HOOKS "Enable debug hooks that pause on crash for debugger attachment" OFF)
-option(PET_FORCE_LLVM_VERSION "Force a specific LLVM version to be used (e.g. 15)" "")
+set(PET_FORCE_LLVM_VERSION "" CACHE STRING "Force a specific LLVM version to be used (e.g. 15)")
 
 # Add custom modules path
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Include CMake modules
-include(ExternalProject)
 include(GNUInstallDirs)
-include(CheckCXXSourceCompiles)
-include(CheckIncludeFileCXX)
-include(CheckSymbolExists)
-include(CMakePackageConfigHelpers)
 
-# Find dependencies using our custom modules
-# Pass the forced LLVM version to the FindLLVMClang module if specified
+# Keep the installed programs pointing at the libraries in the same prefix.
+if(NOT DEFINED CMAKE_INSTALL_RPATH)
+  set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+endif()
+
+# The LLVM version is picked by the clang_feature_tests module, which is
+# reached through isl and extract_interface below.
 if(PET_FORCE_LLVM_VERSION)
   set(LLVM_VERSION ${PET_FORCE_LLVM_VERSION})
   message(STATUS "Enforcing LLVM version: ${PET_FORCE_LLVM_VERSION}")
 endif()
 
-# Find dependencies using our custom modules
-find_package(GMP REQUIRED)
-find_package(LLVMClang REQUIRED)
 find_package(LibYAML REQUIRED)
 
-# Set up include directories and definitions for LLVM/Clang
-include_directories(${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
-add_definitions(${LLVM_DEFINITIONS})
-link_directories(${LLVM_LIBRARY_DIRS})
-
-ExternalProject_Add(isl
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/isl
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/isl/configure --prefix=<INSTALL_DIR>
-    BUILD_COMMAND make
-    INSTALL_COMMAND make install
-    BUILD_BYPRODUCTS <INSTALL_DIR>/lib/libisl.a
-)
-
-# Get the install directory property and set paths correctly
-ExternalProject_Get_Property(isl install_dir)
-set(ISL_INCLUDE_DIRS ${install_dir}/include)
-include_directories(${ISL_INCLUDE_DIRS})
-
-# Set the correct path to the ISL library
-set(ISL_LIBRARIES ${install_dir}/lib/libisl.a)
-set(ISL_DEPENDS isl)
-
-set(HAVE_ISL_BUILDDIR TRUE)
-set(ISL_SRCDIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/isl)
-set(ISL_BUILDDIR ${CMAKE_CURRENT_BINARY_DIR}/isl-prefix/src/isl-build)
-
-set(EXTRA_BIN_PROGRAMS pet)
-set(EXTRA_NOINST_PROGRAMS pet_scop_cmp)
-
-# Include our custom Clang feature detection module
-include(CheckClangFeatures)
-
-# Check for various Clang features and generate config.h
-check_clang_features()
-
-# Set package information for config.h
-set(PACKAGE "pet")
-set(PACKAGE_BUGREPORT "isl-development@googlegroups.com")
-set(PACKAGE_NAME "pet")
-set(PACKAGE_STRING "pet ${PROJECT_VERSION}")
-set(PACKAGE_TARNAME "pet")
-set(PACKAGE_URL "")
-set(PACKAGE_VERSION "${PROJECT_VERSION}")
-set(VERSION "${PROJECT_VERSION}")
+# isl is built as part of this project.  It also brings in extract_interface
+# and, with it, the clang_feature_tests target that provides clang_features.h
+# and the Clang/LLVM include and link flags.
+add_subdirectory(ThirdParty/isl)
 
 # Configure config.h from template
 configure_file(
@@ -79,32 +36,6 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/config.h
   @ONLY
 )
-
-# Configure all.c if needed for ISL bindings
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/all.c.in
-  ${CMAKE_CURRENT_BINARY_DIR}/all.c
-  @ONLY
-)
-
-# Optional isl.py generation
-if(EXISTS "${ISL_BUILDDIR}/interface/extract_interface${CMAKE_EXECUTABLE_SUFFIX}")
-  add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/isl.py
-    COMMAND ${CMAKE_COMMAND} -E cat ${CMAKE_CURRENT_SOURCE_DIR}/interface/isl.py.top > ${CMAKE_CURRENT_BINARY_DIR}/isl.py
-    COMMAND ${ISL_BUILDDIR}/interface/extract_interface${CMAKE_EXECUTABLE_SUFFIX} --language=python ${CLANG_CXXFLAGS} "${ISL_SRCDIR}/all.h" >> ${CMAKE_CURRENT_BINARY_DIR}/isl.py
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/interface/isl.py.top
-    COMMENT "Generating isl.py"
-    VERBATIM
-  )
-  add_custom_target(isl_py ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/isl.py)
-
-  # Create dummy library that captures the dependencies on all headers
-  add_library(dep STATIC ${CMAKE_CURRENT_BINARY_DIR}/all.c)
-  target_include_directories(dep PRIVATE ${ISL_INCLUDE_DIRS})
-  target_compile_options(dep PRIVATE ${CLANG_CXXFLAGS})
-  add_dependencies(isl_py dep)
-endif()
 
 # Define library sources
 set(PET_SOURCES
@@ -142,16 +73,21 @@ set(PET_SOURCES
 
 # Configure debug hooks
 if(PET_ENABLE_DEBUG_HOOKS)
-  add_definitions(-DPET_ENABLE_DEBUG_HOOKS)
   list(APPEND PET_SOURCES debug_hooks.c)
 endif()
 
-# Create pet library
-add_library(pet ${PET_SOURCES})
+# Create pet library.  The version is the ABI version that the libtool
+# -version-info 10:8:0 of the autotools build produced, which is unrelated
+# to the release version above.
+add_library(pet SHARED ${PET_SOURCES})
 set_target_properties(pet PROPERTIES
-  VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR}
+  VERSION 10.0.8
+  SOVERSION 10
 )
+
+if(PET_ENABLE_DEBUG_HOOKS)
+  target_compile_definitions(pet PRIVATE PET_ENABLE_DEBUG_HOOKS)
+endif()
 
 target_include_directories(pet
   PUBLIC
@@ -160,122 +96,37 @@ target_include_directories(pet
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${ISL_INCLUDE_DIRS}
 )
 
-if(ISL_DEPENDS)
-  add_dependencies(pet ${ISL_DEPENDS})
-endif()
+target_link_libraries(pet PUBLIC isl PRIVATE clang_feature_tests)
 
-# Apply LLVM/Clang flags
-target_compile_options(pet PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet PUBLIC ${ISL_LIBRARIES} ${CLANG_LIBRARIES} ${LLVM_LIBRARIES} GMP::gmp)
+# The programs shipped with pet.  Their only C++ source is the library they
+# link against, so the linker language has to be set explicitly.
+function(add_pet_program name)
+  add_executable(${name} ${ARGN})
+  set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
+  target_include_directories(${name} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+  )
+  target_link_libraries(${name} PRIVATE pet)
+endfunction()
 
-# pet executable
-add_executable(pet_exe
-  dummy.cc
-  emit.c
-  main.c
-)
+add_pet_program(pet_exe emit.c main.c)
 set_target_properties(pet_exe PROPERTIES OUTPUT_NAME pet)
-target_include_directories(pet_exe PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}
-  ${LIBYAML_INCLUDE_DIRS}
-)
-target_compile_options(pet_exe PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet_exe PRIVATE
-  pet
-  ${ISL_LIBRARIES}
-  ${LIBYAML_LIBRARIES}
-)
-target_link_options(pet_exe PRIVATE ${CLANG_LDFLAGS})
+target_include_directories(pet_exe PRIVATE ${LIBYAML_INCLUDE_DIRS})
+target_link_libraries(pet_exe PRIVATE ${LIBYAML_LIBRARIES})
 
-# pet_scop_cmp executable
-add_executable(pet_scop_cmp
-  dummy.cc
-  parse.c
-  pet_scop_cmp.c
-)
-target_include_directories(pet_scop_cmp PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}
-  ${LIBYAML_INCLUDE_DIRS}
-)
-target_compile_options(pet_scop_cmp PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet_scop_cmp PRIVATE
-  pet
-  ${ISL_LIBRARIES}
-  ${LIBYAML_LIBRARIES}
-)
-target_link_options(pet_scop_cmp PRIVATE ${CLANG_LDFLAGS})
+add_pet_program(pet_scop_cmp parse.c pet_scop_cmp.c)
+target_include_directories(pet_scop_cmp PRIVATE ${LIBYAML_INCLUDE_DIRS})
+target_link_libraries(pet_scop_cmp PRIVATE ${LIBYAML_LIBRARIES})
 
-# pet_codegen executable
-add_executable(pet_codegen
-  dummy.cc
-  pet_codegen.c
-)
-target_include_directories(pet_codegen PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_compile_options(pet_codegen PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet_codegen PRIVATE pet ${ISL_LIBRARIES})
-target_link_options(pet_codegen PRIVATE ${CLANG_LDFLAGS})
-
-# pet_check_code executable
-add_executable(pet_check_code
-  dummy.cc
-  pet_check_code.c
-)
-target_include_directories(pet_check_code PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_compile_options(pet_check_code PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet_check_code PRIVATE pet ${ISL_LIBRARIES})
-target_link_options(pet_check_code PRIVATE ${CLANG_LDFLAGS})
-
-# pet_loopback executable
-add_executable(pet_loopback
-  dummy.cc
-  pet_loopback.c
-)
-target_include_directories(pet_loopback PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_compile_options(pet_loopback PRIVATE ${CLANG_CXXFLAGS})
-target_link_libraries(pet_loopback PRIVATE pet ${ISL_LIBRARIES})
-target_link_options(pet_loopback PRIVATE ${CLANG_LDFLAGS})
-
-# Configure test scripts
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/pet_test.sh.in
-  ${CMAKE_CURRENT_BINARY_DIR}/pet_test.sh
-  @ONLY
-)
-file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/pet_test.sh PERMISSIONS
-  OWNER_READ OWNER_WRITE OWNER_EXECUTE
-  GROUP_READ GROUP_EXECUTE
-  WORLD_READ WORLD_EXECUTE
-)
-
-# Configure codegen test script
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/codegen_test.sh.in
-  ${CMAKE_CURRENT_BINARY_DIR}/codegen_test.sh
-  @ONLY
-)
-file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/codegen_test.sh PERMISSIONS
-  OWNER_READ OWNER_WRITE OWNER_EXECUTE
-  GROUP_READ GROUP_EXECUTE
-  WORLD_READ WORLD_EXECUTE
-)
+add_pet_program(pet_codegen pet_codegen.c)
+add_pet_program(pet_check_code pet_check_code.c)
+add_pet_program(pet_loopback pet_loopback.c)
 
 # Installation
 install(TARGETS pet
-  EXPORT PETTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -285,12 +136,30 @@ install(FILES include/pet.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-install(TARGETS pet_exe pet_scop_cmp
+# Only the pet program itself was installed by the autotools build; the
+# others were noinst_PROGRAMS, that is, test drivers.
+install(TARGETS pet_exe
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(TARGETS pet_codegen pet_check_code pet_loopback
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+# pkg-config description, as AX_CREATE_PKGCONFIG_INFO used to produce.
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+  set(PKGCONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+else()
+  set(PKGCONFIG_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
+endif()
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+  set(PKGCONFIG_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+  set(PKGCONFIG_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/pet.pc.in
+  ${CMAKE_CURRENT_BINARY_DIR}/pet.pc
+  @ONLY
+)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/pet.pc
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
 
 # Adding PET unit tests for ctest
@@ -348,12 +217,6 @@ function(add_pet_test source_file pet_options test_group)
                 ${reference_scop}
     )
 
-    # Set properties to preserve output on failure
-    set_tests_properties(PET_Test_${test_group}_${test_name} PROPERTIES
-        WILL_FAIL FALSE
-        SKIP_RETURN_CODE 77
-    )
-
     # Create a custom target for manual running via build system
     add_custom_target(${test_target}
         COMMAND ${CMAKE_CTEST_COMMAND} -R "^PET_Test_${test_group}_${test_name}$" -V
@@ -371,11 +234,14 @@ endfunction()
 
 # Function to add code generation tests
 function(add_codegen_test source_file)
-    # Get the filename without extension and directory name
-    get_filename_component(test_name ${source_file} NAME_WE)
+    # NAME_WE and EXT split at the *first* dot, which mangles inputs such as
+    # p.delft-0.in: the name becomes "p" and the extension ".delft-0.in", so
+    # the file is no longer recognised as a schedule with options.  Split at
+    # the last dot instead.
+    get_filename_component(test_name ${source_file} NAME_WLE)
     get_filename_component(test_dir ${source_file} DIRECTORY)
     get_filename_component(dir_name ${test_dir} NAME)
-    get_filename_component(ext ${source_file} EXT)
+    get_filename_component(ext ${source_file} LAST_EXT)
 
     # Create a unique test group identifier based on the directory path
     if(dir_name STREQUAL "codegen")
@@ -392,12 +258,20 @@ function(add_codegen_test source_file)
         string(SUBSTRING ${dir_hash} 0 6 test_group)
     endif()
 
+    # A schedule tree and a schedule with options can share a base name,
+    # for instance unroll10.st and unroll10.in, so the extension has to be
+    # part of the group too or their targets and tests collide.
+    string(SUBSTRING ${ext} 1 -1 ext_name)
+    set(test_group "${test_group}_${ext_name}")
+
     # Output C file
     set(output_c_base "${CMAKE_CURRENT_BINARY_DIR}/test_outputs/${test_group}_${test_name}.test.c")
 
-    # List of options for testing
+    # List of options for testing.  An empty element vanishes when a CMake
+    # list is expanded, so the run without options is named rather than
+    # spelled as an empty string and translated back below.
     set(options_list
-        ""
+        "default"
         "--separate"
         "--atomic"
         "--isl-no-ast-build-atomic-upper-bound"
@@ -421,11 +295,13 @@ function(add_codegen_test source_file)
     # For each option, create a separate test
     foreach(options ${options_list})
         # Create a unique name for the test variant
-        if(options STREQUAL "")
+        if(options STREQUAL "default")
             set(option_suffix "default")
+            set(pet_options "")
         else()
             string(REPLACE " " "_" option_suffix "${options}")
             string(REPLACE "--" "" option_suffix "${option_suffix}")
+            set(pet_options "${options}")
         endif()
 
         set(variant_target "${test_target}_${option_suffix}")
@@ -435,7 +311,7 @@ function(add_codegen_test source_file)
         set(wrapper_script "${CMAKE_CURRENT_BINARY_DIR}/test_outputs/${test_group}_${test_name}_${option_suffix}_wrapper.sh")
         file(WRITE ${wrapper_script} "#!/bin/bash\n")
         file(APPEND ${wrapper_script} "set -e\n")
-        file(APPEND ${wrapper_script} "cat $2 | $1 ${tree_option} ${options} > $3 || { echo \"Error generating code\"; exit 1; }\n")
+        file(APPEND ${wrapper_script} "cat $2 | $1 ${tree_option} ${pet_options} > $3 || { echo \"Error generating code\"; exit 1; }\n")
         file(APPEND ${wrapper_script} "$4 ${tree_option} $2 $3 || { echo \"Error checking code\"; exit 1; }\n")
         file(APPEND ${wrapper_script} "exit 0\n")
 
@@ -455,16 +331,10 @@ function(add_codegen_test source_file)
                     $<TARGET_FILE:pet_check_code>
         )
 
-        # Set properties to preserve output on failure
-        set_tests_properties(Codegen_Test_${test_group}_${test_name}_${option_suffix} PROPERTIES
-            WILL_FAIL FALSE
-            SKIP_RETURN_CODE 77
-        )
-
         # Create a custom target for manual running via build system
         add_custom_target(${variant_target}
             COMMAND ${CMAKE_CTEST_COMMAND} -R "^Codegen_Test_${test_group}_${test_name}_${option_suffix}$" -V
-            COMMENT "Running codegen test for ${test_name} with options '${options}'"
+            COMMENT "Running codegen test for ${test_name} with options '${pet_options}'"
             VERBATIM
         )
 
@@ -480,39 +350,41 @@ endfunction()
 # Find and add tests - IMPORTANT: Use ABSOLUTE paths for globbing
 #--------------------------------------------------------------------
 
-set_property(GLOBAL PROPERTY TEST_NAMES "")  # Clear global test list
-
 # Find standard PET tests with absolute paths
-file(GLOB PET_TEST_FILES "${PROJECT_SOURCE_DIR}/tests/*.c")
+file(GLOB PET_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c")
 foreach(test_file ${PET_TEST_FILES})
     add_pet_test(${test_file} "" "standard")
 endforeach()
 
 # Find autodetect tests with absolute paths
-file(GLOB PET_AUTODETECT_TEST_FILES "${PROJECT_SOURCE_DIR}/tests/autodetect/*.c")
+file(GLOB PET_AUTODETECT_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/autodetect/*.c")
 foreach(test_file ${PET_AUTODETECT_TEST_FILES})
     add_pet_test(${test_file} "--autodetect" "autodetect")
 endforeach()
 
 # Find encapsulate tests with absolute paths
-file(GLOB PET_ENCAPSULATE_TEST_FILES "${PROJECT_SOURCE_DIR}/tests/encapsulate/*.c")
+file(GLOB PET_ENCAPSULATE_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/encapsulate/*.c")
 foreach(test_file ${PET_ENCAPSULATE_TEST_FILES})
     add_pet_test(${test_file} "--encapsulate-dynamic-control" "encapsulate")
 endforeach()
 
 # Find and add code generation tests with absolute paths
-file(GLOB CODEGEN_ST_TEST_FILES
-    "${PROJECT_SOURCE_DIR}/test_inputs/codegen/*.st"
-    "${PROJECT_SOURCE_DIR}/test_inputs/codegen/cloog/*.st"
+# The codegen inputs live in isl; the autotools driver read them from
+# @ISL_SRCDIR@ for the same reason.
+set(ISL_TEST_INPUTS ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/isl/test_inputs)
+
+file(GLOB CODEGEN_ST_TEST_FILES CONFIGURE_DEPENDS
+    "${ISL_TEST_INPUTS}/codegen/*.st"
+    "${ISL_TEST_INPUTS}/codegen/cloog/*.st"
 )
 foreach(test_file ${CODEGEN_ST_TEST_FILES})
     add_codegen_test(${test_file})
 endforeach()
 
-file(GLOB CODEGEN_IN_TEST_FILES
-    "${PROJECT_SOURCE_DIR}/test_inputs/codegen/*.in"
-    "${PROJECT_SOURCE_DIR}/test_inputs/codegen/omega/*.in"
-    "${PROJECT_SOURCE_DIR}/test_inputs/codegen/pldi2012/*.in"
+file(GLOB CODEGEN_IN_TEST_FILES CONFIGURE_DEPENDS
+    "${ISL_TEST_INPUTS}/codegen/*.in"
+    "${ISL_TEST_INPUTS}/codegen/omega/*.in"
+    "${ISL_TEST_INPUTS}/codegen/pldi2012/*.in"
 )
 foreach(test_file ${CODEGEN_IN_TEST_FILES})
     add_codegen_test(${test_file})
@@ -565,12 +437,5 @@ add_custom_target(codegen_st_tests
 add_custom_target(codegen_in_tests
     COMMAND ${CMAKE_CTEST_COMMAND} -R "^Codegen_Test_.*_.*_(separate|atomic|isl)"
     COMMENT "Running variant codegen tests"
-    VERBATIM
-)
-
-# Target for running all tests
-add_custom_target(all_tests
-    COMMAND ${CMAKE_CTEST_COMMAND}
-    COMMENT "Running all tests"
     VERBATIM
 )
