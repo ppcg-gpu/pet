@@ -1,5 +1,5 @@
 # file(CHMOD), used by the test framework below, needs 3.19.
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.21)
 
 project(pet VERSION 0.11.8 LANGUAGES C CXX)
 
@@ -143,6 +143,8 @@ install(TARGETS pet_exe
 )
 
 # pkg-config description, as AX_CREATE_PKGCONFIG_INFO used to produce.
+# Everything under the prefix is expressed relative to it; the prefix
+# itself is the one the build was configured with.
 if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
   set(PKGCONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
 else()
@@ -163,7 +165,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/pet.pc
 )
 
 # Adding PET unit tests for ctest
-enable_testing()
+# BUILD_TESTING comes from CTest and has to actually switch the tests off,
+# so everything below is registered only when it is on.
+include(CTest)
+
+if(BUILD_TESTING)
 
 # Create a directory for tests if it doesn't exist yet
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_outputs")
@@ -439,3 +445,5 @@ add_custom_target(codegen_in_tests
     COMMENT "Running variant codegen tests"
     VERBATIM
 )
+
+endif()

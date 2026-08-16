@@ -771,7 +771,8 @@ struct MyDiagnosticPrinter : public TextDiagnosticPrinter {
 	int pencil;
 #ifdef TEXTDIAGNOSTICPRINTER_TAKES_POINTER
 	MyDiagnosticPrinter(DiagnosticOptions *DO, int pencil) :
-		TextDiagnosticPrinter(llvm::errs(), DO), pencil(pencil) {}
+		TextDiagnosticPrinter(llvm::errs(), DO), DiagOpts(DO),
+		pencil(pencil) {}
 	virtual DiagnosticConsumer *clone(DiagnosticsEngine &Diags) const {
 		return new MyDiagnosticPrinter(&Diags.getDiagnosticOptions(),
 						pencil);
@@ -1275,12 +1276,6 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 {
 	CompilerInstance *Clang = new CompilerInstance();
 	create_configured_diagnostics(Clang);
-	/* The language defaults depend on the target triple, while
-	 * the target information keeps a pointer to the target options,
-	 * so it can only be created once the invocation is final.
-	 */
-	Clang->getTargetOpts().Triple = llvm::sys::getDefaultTargetTriple();
-	set_lang_defaults(Clang);
 	CompilerInvocation *invocation =
 		construct_invocation(filename, Clang->getDiagnostics());
 	if (invocation) {
@@ -1294,6 +1289,14 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	TargetInfo *target = create_target_info(Clang,
 						Clang->getDiagnostics());
 	Clang->setTarget(target);
+	/* Without an invocation from the driver, the language options are
+	 * the ones the compiler instance was created with, so the defaults
+	 * for the target are set explicitly.  With one, they come from
+	 * the command line the driver constructed, and setting them here
+	 * would only throw that away.
+	 */
+	if (!invocation)
+		set_lang_defaults(Clang);
 	DiagnosticsEngine &Diags = Clang->getDiagnostics();
 	Diags.setClient(construct_printer(Clang, options->pencil));
 	Clang->createFileManager();
