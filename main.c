@@ -62,6 +62,7 @@ int main(int argc, char *argv[])
 	isl_ctx *ctx;
 	struct pet_scop *scop;
 	struct options *options;
+	int r;
 
 #ifdef PET_ENABLE_DEBUG_HOOKS
     pet_debug_hooks_init();
@@ -76,6 +77,12 @@ int main(int argc, char *argv[])
 	if (scop)
 		pet_scop_emit(stdout, scop);
 
+	/* A source that could not be read is a failure; one that was read
+	 * and holds no scop is not, since a file is free not to have one.
+	 */
+	r = isl_ctx_last_error(ctx) == isl_error_none ?
+		EXIT_SUCCESS : EXIT_FAILURE;
+
 	pet_scop_free(scop);
 
 	isl_ctx_free(ctx);
@@ -84,5 +91,5 @@ int main(int argc, char *argv[])
     pet_debug_hooks_cleanup();
 #endif
 
-	return 0;
+	return r;
 }

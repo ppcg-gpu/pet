@@ -58,6 +58,10 @@ ISL_ARG_STR_LIST(struct pet_options, n_path, paths, 'I', "include-path",
 	"path", NULL)
 ISL_ARG_STR_LIST(struct pet_options, n_define, defines, 'D', NULL,
 	"macro[=defn]", NULL)
+ISL_ARG_STR(struct pet_options, compile_commands, 0, "compile-commands",
+	"path", NULL,
+	"directory holding compile_commands.json, or the file itself, "
+	"to take the flags a file is compiled with from")
 ISL_ARG_VERSION(&pet_print_version)
 ISL_ARGS_END
 

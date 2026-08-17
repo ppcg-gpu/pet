@@ -23,6 +23,12 @@ struct pet_options {
 	const char **paths;
 	int	n_define;
 	const char **defines;
+	/* Where the compilation database of the project is, either the
+	 * directory holding compile_commands.json or the file itself.
+	 * When it is given, a file is parsed with the flags the project
+	 * builds it with rather than with none.
+	 */
+	char	*compile_commands;
 
 	unsigned signed_overflow;
 };

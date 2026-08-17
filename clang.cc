@@ -141,6 +141,11 @@ FunctionDecl *pet_clang_find_function_decl_with_body(FunctionDecl *fd)
 {
 	const FunctionDecl *def;
 
+	/* A call through a function pointer names no declaration at all,
+	 * and one that names none has no body to find.
+	 */
+	if (!fd)
+		return NULL;
 	if (!fd->hasBody(def))
 		return NULL;
 

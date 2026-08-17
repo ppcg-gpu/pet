@@ -295,6 +295,18 @@ function(add_linked_scop_test name corpus units function expected)
     )
 endfunction()
 
+# What a project builds a file with, taken from the compilation database
+# its build system writes.  Without those options a file of any real
+# project does not parse at all.
+add_test(NAME PET_CompileCommands
+    COMMAND ${CMAKE_COMMAND}
+        -DPET=$<TARGET_FILE:pet_exe>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/compile_commands
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/compile_commands
+        -DSOURCE=unit.c
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunCompileCommandsTest.cmake
+)
+
 # A blur over a two dimensional image whose row pass lives in its own
 # translation unit.  Linked, the scop covers both loops and the statement
 # is the assignment inside the row pass; the caller on its own only has

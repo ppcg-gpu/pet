@@ -56,6 +56,9 @@
 #else
 #include <llvm/Support/Host.h>
 #endif
+#include <clang/Tooling/CompilationDatabase.h>
+#include <clang/Tooling/JSONCompilationDatabase.h>
+#include <llvm/Support/FileSystem.h>
 #include <clang/Basic/Version.h>
 #include <clang/Basic/Builtins.h>
 #include <clang/Basic/FileSystemOptions.h>
@@ -866,19 +869,96 @@ static void create_from_args(CompilerInvocation &invocation,
 
 #endif
 
+/* Add to "Argv" the options the project builds "filename" with,
+ * according to the compilation database named by "path".
+ *
+ * The strings the options are made of belong to "storage", which the
+ * caller keeps alive for as long as "Argv" is used.
+ *
+ * A compilation database records, for every file of a project, the
+ * command that builds it.  What is wanted from that command is the
+ * options only: the name of the compiler, the file itself and whatever
+ * says where the output goes are all decided here rather than there.
+ * The directory the command was to be run from is passed on, since the
+ * paths in it are relative to that and not to wherever pet was started.
+ */
+static void add_compile_commands(const char *path, const char *filename,
+	std::vector<const char *> &Argv, std::vector<std::string> &storage)
+{
+	std::string error;
+	std::unique_ptr<tooling::CompilationDatabase> db;
+
+	if (llvm::sys::fs::is_directory(path))
+		db = tooling::CompilationDatabase::loadFromDirectory(path,
+									error);
+	else
+		db = tooling::JSONCompilationDatabase::loadFromFile(path,
+			error, tooling::JSONCommandLineSyntax::AutoDetect);
+	if (!db) {
+		fprintf(stderr, "pet: no compilation database in %s: %s\n",
+			path, error.c_str());
+		return;
+	}
+
+	std::vector<tooling::CompileCommand> commands =
+		db->getCompileCommands(filename);
+	if (commands.empty()) {
+		fprintf(stderr, "pet: %s is not in the compilation database\n",
+			filename);
+		return;
+	}
+
+	const tooling::CompileCommand &command = commands[0];
+	storage.push_back("-working-directory=" + command.Directory);
+	for (size_t i = 1; i < command.CommandLine.size(); ++i) {
+		const std::string &arg = command.CommandLine[i];
+
+		if (arg == "-c" || arg == "-o")
+			continue;
+		if (i > 0 && command.CommandLine[i - 1] == "-o")
+			continue;
+		if (arg == command.Filename || arg == filename)
+			continue;
+		storage.push_back(arg);
+	}
+
+	for (size_t i = 0; i < storage.size(); ++i)
+		Argv.push_back(storage[i].c_str());
+}
+
 /* Create a CompilerInvocation object that stores the command line
  * arguments constructed by the driver.
  * The arguments are mainly useful for setting up the system include
  * paths on newer clangs and on some platforms.
+ *
+ * When a compilation database was named, the file is described to the
+ * driver the way the project builds it.  Without that, a file that is
+ * part of a project of any size does not parse at all, since it reaches
+ * for headers that only the project's own options say where to find.
  */
 static CompilerInvocation *construct_invocation(const char *filename,
-	DiagnosticsEngine &Diags)
+	DiagnosticsEngine &Diags, struct pet_options *options)
 {
 	const char *binary = CLANG_PREFIX"/bin/clang";
 	const unique_ptr<Driver> driver(construct_driver(binary, Diags));
 	std::vector<const char *> Argv;
+	std::vector<std::string> storage;
+
 	Argv.push_back(binary);
-	Argv.push_back(filename);
+	if (options && options->compile_commands) {
+		add_compile_commands(options->compile_commands, filename,
+					Argv, storage);
+		/* The directory the project builds in is imposed above, so
+		 * the file has to be named in a way that does not depend
+		 * on which directory that is.
+		 */
+		llvm::SmallString<128> absolute(filename);
+		llvm::sys::fs::make_absolute(absolute);
+		storage.push_back(std::string(absolute.str()));
+		Argv.push_back(storage.back().c_str());
+	} else {
+		Argv.push_back(filename);
+	}
 	const unique_ptr<Compilation> compilation(
 		driver->BuildCompilation(llvm::ArrayRef<const char *>(Argv)));
 	JobList &Jobs = compilation->getJobs();
@@ -899,7 +979,7 @@ static CompilerInvocation *construct_invocation(const char *filename,
 #else
 
 static CompilerInvocation *construct_invocation(const char *filename,
-	DiagnosticsEngine &Diags)
+	DiagnosticsEngine &Diags, struct pet_options *options)
 {
 	return NULL;
 }
@@ -1279,7 +1359,8 @@ static isl_stat emit_ast_for_C_source(isl_ctx *ctx, const char *filename,
 	CompilerInstance *Clang = new CompilerInstance();
 	create_configured_diagnostics(Clang);
 	CompilerInvocation *invocation =
-		construct_invocation(filename, Clang->getDiagnostics());
+		construct_invocation(filename, Clang->getDiagnostics(),
+					options);
 	if (invocation) {
 		set_invocation(Clang, invocation);
 		create_configured_diagnostics(Clang);
@@ -1333,7 +1414,8 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	CompilerInstance *Clang = new CompilerInstance();
 	create_configured_diagnostics(Clang);
 	CompilerInvocation *invocation =
-		construct_invocation(filename, Clang->getDiagnostics());
+		construct_invocation(filename, Clang->getDiagnostics(),
+					options);
 	if (invocation) {
 		set_invocation(Clang, invocation);
 		/* Installing the invocation replaces the options that both
@@ -1428,8 +1510,22 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	ParseAST(*sema);
 	Diags.getClient()->EndSourceFile();
 
+	/* Whether the source could be read at all is a different question
+	 * than whether a scop came out of it, and only the first is an
+	 * error of the source.  A fatal error is one that stopped the
+	 * reading, such as a header that could not be found; the errors
+	 * that are not fatal are counted by the engine even where pet
+	 * means to pass over them, and a file that simply holds no scop
+	 * reports none either way.
+	 */
+	int unreadable = Diags.hasFatalErrorOccurred();
+
 	delete sema;
 	delete Clang;
+
+	if (unreadable)
+		isl_die(ctx, isl_error_invalid, "cannot read the source",
+			return isl_stat_error);
 
 	return consumer.error ? isl_stat_error : isl_stat_ok;
 }
