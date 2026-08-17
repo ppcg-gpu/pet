@@ -2695,6 +2695,20 @@ error:
 	return pet_expr_free(expr);
 }
 
+/* Return the type the cast performed by "expr" casts to.
+ *
+ * The string belongs to "expr" and is valid for as long as it is.
+ */
+const char *pet_expr_cast_get_type_name(__isl_keep pet_expr *expr)
+{
+	if (!expr)
+		return NULL;
+	if (expr->type != pet_expr_cast)
+		isl_die(pet_expr_get_ctx(expr), isl_error_invalid,
+			"not a cast expression", return NULL);
+	return expr->type_name;
+}
+
 /* Replace the type of the cast performed by "expr" by "name".
  */
 __isl_give pet_expr *pet_expr_cast_set_type_name(__isl_take pet_expr *expr,

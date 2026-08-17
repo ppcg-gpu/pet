@@ -230,6 +230,8 @@ __isl_give pet_expr *pet_expr_call_set_name(__isl_take pet_expr *expr,
 /* Create a pet_expr representing a cast of "arg" to "type_name". */
 __isl_give pet_expr *pet_expr_new_cast(const char *type_name,
 	__isl_take pet_expr *arg);
+/* Return the type the cast performed by "expr" casts to. */
+const char *pet_expr_cast_get_type_name(__isl_keep pet_expr *expr);
 /* Replace the type of the cast performed by "expr" by "name". */
 __isl_give pet_expr *pet_expr_cast_set_type_name(__isl_take pet_expr *expr,
 	__isl_keep const char *name);
