@@ -70,9 +70,26 @@ struct Independent {
 /* Compare two TypeDecl pointers based on their names.
  */
 struct less_name {
+	/* The name to order by.
+	 *
+	 * Only a name that is a plain identifier is used.  Writing out
+	 * any other kind means printing a declaration name, which for
+	 * some of the names a C++ program gives its types reaches for
+	 * things that are not there.  Those all order together, which
+	 * costs nothing: a type pet cannot name is one it cannot write
+	 * out either.
+	 */
+	static std::string key(const clang::TypeDecl *decl) {
+		clang::DeclarationName name = decl->getDeclName();
+
+		if (name.isIdentifier() && name.getAsIdentifierInfo())
+			return name.getAsIdentifierInfo()->getName().str();
+
+		return std::string();
+	}
 	bool operator()(const clang::TypeDecl *x,
 			const clang::TypeDecl *y) const {
-		return x->getNameAsString().compare(y->getNameAsString()) < 0;
+		return key(x).compare(key(y)) < 0;
 	}
 };
 

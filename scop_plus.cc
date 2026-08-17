@@ -62,6 +62,8 @@ static void collect_direct_sub_arrays(ValueDecl *decl,
 
 	type = pet_clang_base_type(type);
 	record = pet_clang_record_decl(type);
+	if (!record)
+		return;
 
 	ctx = isl_id_list_get_ctx(ancestors);
 	for (it = record->field_begin(); it != record->field_end(); ++it) {

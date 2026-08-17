@@ -83,13 +83,22 @@ QualType pet_clang_base_or_typedef_type(QualType qt)
 	return qt;
 }
 
-/* Given a record type, return the corresponding RecordDecl.
+/* The RecordDecl of "T", or NULL when "T" is not a record type.
+ *
+ * A C++ type that names a class need not be a record type once it is
+ * asked what it is: the name of a class inside its own definition, and
+ * one that is still written in terms of a template parameter, are types
+ * with no declaration to return.
  */
 RecordDecl *pet_clang_record_decl(QualType T)
 {
 	const Type *type = T->getCanonicalTypeInternal().getTypePtr();
 	const RecordType *record;
-	record = cast<RecordType>(type);
+
+	record = dyn_cast<RecordType>(type);
+	if (!record)
+		return NULL;
+
 	return record->getDecl();
 }
 

@@ -3027,6 +3027,8 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 			types->insert(cast<TypedefType>(base)->getDecl());
 		} else if (base->isRecordType()) {
 			RecordDecl *decl = pet_clang_record_decl(base);
+			if (!decl)
+				return NULL;
 			TypedefNameDecl *typedecl;
 			typedecl = decl->getTypedefNameForAnonDecl();
 			if (typedecl)
@@ -3177,8 +3179,9 @@ static struct pet_scop *add_field_types(isl_ctx *ctx, struct pet_scop *scop,
 			RecordDecl *record;
 
 			record = pet_clang_record_decl(type);
-			scop = add_type(ctx, scop, record,
-				PP, types, types_done, n_alloc);
+			if (record)
+				scop = add_type(ctx, scop, record,
+					PP, types, types_done, n_alloc);
 		}
 	}
 
@@ -3260,6 +3263,8 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 
 	if (qt->isRecordType()) {
 		RecordDecl *rec = pet_clang_record_decl(qt);
+		if (!rec)
+			return scop;
 
 		scop = add_field_types(ctx, scop, rec, PP, types,
 					types_done, n_alloc);
@@ -3499,8 +3504,11 @@ bool RecursionDetector::is_recursive(QualType qt)
 {
 	QualType base = pet_clang_base_type(qt);
 
-	if (base->isRecordType())
-		return is_recursive(pet_clang_record_decl(base));
+	if (base->isRecordType()) {
+		RecordDecl *rec = pet_clang_record_decl(base);
+
+		return rec ? is_recursive(rec) : false;
+	}
 	return false;
 }
 
