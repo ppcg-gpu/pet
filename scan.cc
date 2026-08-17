@@ -3197,6 +3197,12 @@ static struct pet_scop *add_field_types(isl_ctx *ctx, struct pet_scop *scop,
  * make sure that types of fields in a structure appear before
  * that structure.  We therefore call ourselves recursively
  * through add_field_types on the types of all record subfields.
+ *
+ * The declaration is written down as handled before those fields are
+ * looked at rather than after they have been added, because one of them
+ * may lead back here: a structure holding a pointer to its own kind, or
+ * to another that holds one back, would otherwise be descended into for
+ * as long as there is stack to do it with.
  */
 static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	RecordDecl *decl, Preprocessor &PP, PetTypes &types,
@@ -3209,6 +3215,7 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 		return scop;
 	if (types_done.find(decl) != types_done.end())
 		return scop;
+	types_done.insert(decl);
 
 	scop = add_field_types(ctx, scop, decl, PP, types, types_done,
 				n_alloc);
@@ -3228,8 +3235,6 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 				    decl->getNameAsString().c_str(), s.c_str());
 	if (!scop->types[scop->n_type])
 		return pet_scop_free(scop);
-
-	types_done.insert(decl);
 
 	scop->n_type++;
 
@@ -3260,6 +3265,7 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 		return scop;
 	if (types_done.find(decl) != types_done.end())
 		return scop;
+	types_done.insert(decl);
 
 	if (qt->isRecordType()) {
 		RecordDecl *rec = pet_clang_record_decl(qt);
