@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 
+#include <clang_features.h>
+
 #include <clang/AST/ASTImporter.h>
 #include <clang/AST/ASTImporterSharedState.h>
 #include <clang/Frontend/ASTUnit.h>
@@ -33,13 +35,62 @@ using namespace clang;
 struct pet_linked_ast {
 	std::vector<std::unique_ptr<ASTUnit> > units;
 	std::shared_ptr<ASTImporterSharedState> shared;
+	/* Held the way the version of clang in hand wants it: what used
+	 * to be an object with a count of its own is now one the caller
+	 * keeps.
+	 */
+#ifdef DIAGNOSTICSENGINE_TAKES_DIAGOPTIONS_REFERENCE
 	std::shared_ptr<DiagnosticOptions> diag_opts;
+#else
+	IntrusiveRefCntPtr<DiagnosticOptions> diag_opts;
+#endif
 	IntrusiveRefCntPtr<DiagnosticsEngine> diags;
 	std::vector<std::string> refused;
 };
 
-/* Read the translation unit serialised in "file".
+/* Read the translation unit serialised in "file", and make the
+ * diagnostics engine that reading it needs.
+ *
+ * Both have moved between versions of clang.  Reading used to take the
+ * diagnostics engine fourth and the header search options as a shared
+ * pointer, and now takes the file system and the diagnostic options
+ * first and the header search options by reference.  The engine used to
+ * be handed options with a count of their own, and is now handed ones
+ * the caller keeps.
+ *
+ * The engine is given a consumer that says nothing.  What the importer
+ * refuses is reported by name through pet_linked_ast_refused, which is
+ * what a caller acts on, while clang's own account of why would land on
+ * the standard error of whatever is reading the trees.  A consumer is
+ * not optional either: an engine without one crashes the first time it
+ * has something to say.
  */
+#ifdef DIAGNOSTICSENGINE_TAKES_DIAGOPTIONS_REFERENCE
+
+static void make_diagnostics(struct pet_linked_ast *linked)
+{
+	IntrusiveRefCntPtr<DiagnosticIDs> ids(new DiagnosticIDs());
+
+	linked->diag_opts = std::make_shared<DiagnosticOptions>();
+	linked->diags = new DiagnosticsEngine(ids, *linked->diag_opts,
+				new IgnoringDiagConsumer());
+}
+
+#else
+
+static void make_diagnostics(struct pet_linked_ast *linked)
+{
+	IntrusiveRefCntPtr<DiagnosticIDs> ids(new DiagnosticIDs());
+
+	linked->diag_opts = new DiagnosticOptions();
+	linked->diags = new DiagnosticsEngine(ids, linked->diag_opts,
+				new IgnoringDiagConsumer());
+}
+
+#endif
+
+#ifdef LOADFROMASTFILE_TAKES_VFS_FIRST
+
 static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
 	const char *file)
 {
@@ -50,6 +101,21 @@ static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
 		ASTUnit::LoadEverything, llvm::vfs::getRealFileSystem(),
 		linked->diag_opts, linked->diags, fs_opts, hs_opts);
 }
+
+#else
+
+static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
+	const char *file)
+{
+	FileSystemOptions fs_opts;
+	std::shared_ptr<HeaderSearchOptions> hs_opts =
+		std::make_shared<HeaderSearchOptions>();
+
+	return ASTUnit::LoadFromASTFile(file, RawPCHContainerReader(),
+		ASTUnit::LoadEverything, linked->diags, fs_opts, hs_opts);
+}
+
+#endif
 
 /* Import every top level declaration of "src" into the linked context.
  */
@@ -82,9 +148,7 @@ struct pet_linked_ast *pet_ast_link(const char **files, int n)
 		return NULL;
 
 	struct pet_linked_ast *linked = new pet_linked_ast();
-	linked->diag_opts = std::make_shared<DiagnosticOptions>();
-	linked->diags = CompilerInstance::createDiagnostics(
-		*llvm::vfs::getRealFileSystem(), *linked->diag_opts);
+	make_diagnostics(linked);
 
 	std::unique_ptr<ASTUnit> first = read_unit(linked, files[0]);
 	if (!first) {

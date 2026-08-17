@@ -87,9 +87,17 @@ int main(int argc, char **argv)
 		if (auto *rd = dyn_cast<RecordDecl>(d)) {
 			if (rd->getName().empty())
 				continue;
-			QualType qt = ctx.getCanonicalTagType(rd);
+			/* The canonical declaration, rather than the
+			 * canonical type: what is being asked is
+			 * whether the two units' structs became one
+			 * entity, and that is what a declaration
+			 * having one canonical form means.  Asking it
+			 * of the type would mean naming a way of
+			 * getting at the type, and clang has renamed
+			 * that more than once.
+			 */
 			records[rd->getName().str()].insert(
-				qt.getCanonicalType().getAsOpaquePtr());
+				(const void *) rd->getCanonicalDecl());
 		} else if (auto *fd = dyn_cast<FunctionDecl>(d)) {
 			if (fd->getFormalLinkage() != Linkage::Internal)
 				continue;
