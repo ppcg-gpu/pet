@@ -261,6 +261,22 @@ add_ast_link_test(incomplete merge "total" expected-total-only.txt)
 # Units that disagree about a type and about the type of a function
 # describe programs that cannot be made into one.  The declarations
 # involved are refused by name and the link is rejected.
+# Two units that instantiate one template and reach for different
+# members of it.  Which members a unit materialised is not a property of
+# the type, so the two are one type and the link has nothing to refuse.
+add_test(NAME PET_AstLink_lazy
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DLINKER=$<TARGET_FILE:pet_ast_link>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/lazy
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/lazy
+        -DSUFFIX=.cpp
+        -DSUMMARY_ONLY=ON
+        "-DUNITS=uses_size|uses_begin"
+        -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/lazy/expected.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
+)
+
 add_ast_link_test(conflict conflict "incompatible_a;incompatible_b"
     expected.txt EXPECT_FAIL)
 

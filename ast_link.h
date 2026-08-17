@@ -39,10 +39,14 @@ void pet_ast_link_free(struct pet_linked_ast *linked);
 int pet_linked_ast_n_refused(struct pet_linked_ast *linked);
 
 /* The name of the "i"th declaration that could not be imported, or the
- * empty string for one that has no name.  Clang reports why on its
- * diagnostic output as the link proceeds; this says what was lost.
+ * empty string for one that has no name.
  */
 const char *pet_linked_ast_refused(struct pet_linked_ast *linked, int i);
+
+/* Why the "i"th declaration could not be imported, as the importer put
+ * it.
+ */
+const char *pet_linked_ast_refused_why(struct pet_linked_ast *linked, int i);
 
 #if defined(__cplusplus)
 }

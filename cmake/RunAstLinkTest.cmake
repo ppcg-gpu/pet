@@ -13,6 +13,8 @@
 #   LINKER       the pet_ast_link program
 #   SRCDIR       directory holding the corpus
 #   BINDIR       directory to place the serialised units and the output in
+#   SUFFIX       the extension of the units, ".c" when not given
+#   SUMMARY_ONLY compare the counts only, not the listing before them
 #   UNITS        '|' separated base names, in the order they are linked;
 #                the first one is the unit the others are linked into
 #   EXPECTED     file holding the expected report
@@ -29,6 +31,9 @@ file(REMOVE_RECURSE "${BINDIR}")
 file(MAKE_DIRECTORY "${BINDIR}")
 
 string(REPLACE "|" ";" units "${UNITS}")
+if(NOT DEFINED SUFFIX OR "${SUFFIX}" STREQUAL "")
+    set(SUFFIX ".c")
+endif()
 set(emit_args "")
 if(DEFINED EMIT_ARGS AND NOT "${EMIT_ARGS}" STREQUAL "")
     string(REPLACE "|" ";" emit_args "${EMIT_ARGS}")
@@ -38,11 +43,11 @@ set(asts "")
 foreach(unit ${units})
     execute_process(
         COMMAND "${EMITTER}" -I "${SRCDIR}" ${emit_args}
-                "${SRCDIR}/${unit}.c" "${BINDIR}/${unit}.ast"
+                "${SRCDIR}/${unit}${SUFFIX}" "${BINDIR}/${unit}.ast"
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)
-        message(FATAL_ERROR "serialising ${unit}.c failed with ${result}")
+        message(FATAL_ERROR "serialising ${unit}${SUFFIX} failed with ${result}")
     endif()
     list(APPEND asts "${BINDIR}/${unit}.ast")
 endforeach()
@@ -64,13 +69,30 @@ elseif(NOT result EQUAL 0)
     message(FATAL_ERROR "linking failed with ${result}\n${diagnostics}")
 endif()
 
+# A corpus that reaches into the standard library is checked on the
+# counts alone: which of its own functions libstdc++ calls is its
+# business and changes with its version, while what the link made of it
+# does not.
+if(SUMMARY_ONLY)
+    file(STRINGS "${BINDIR}/report.txt" lines)
+    set(summary "")
+    foreach(line ${lines})
+        if(line MATCHES "^(units |refused [0-9]|calls |records )")
+            string(APPEND summary "${line}\n")
+        endif()
+    endforeach()
+    file(WRITE "${BINDIR}/summary.txt" "${summary}")
+    set(report "${BINDIR}/summary.txt")
+else()
+    set(report "${BINDIR}/report.txt")
+endif()
+
 execute_process(
-    COMMAND ${CMAKE_COMMAND} -E compare_files
-            "${EXPECTED}" "${BINDIR}/report.txt"
+    COMMAND ${CMAKE_COMMAND} -E compare_files "${EXPECTED}" "${report}"
     RESULT_VARIABLE result
 )
 if(NOT result EQUAL 0)
-    file(READ "${BINDIR}/report.txt" got)
+    file(READ "${report}" got)
     file(READ "${EXPECTED}" want)
     message(FATAL_ERROR
         "the linked AST is not what was expected.\n"

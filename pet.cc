@@ -643,14 +643,28 @@ struct PetASTConsumer : public ASTConsumer {
 	 *
 	 * If "scop" does not contain any statements and autodetect
 	 * is turned on, then skip it.
+	 *
+	 * A region that no scop could be made of is only a failure when
+	 * the region was pointed at: with autodetect the regions are
+	 * looked for rather than given, and most of what is looked at is
+	 * not a scop, which is the answer and not an error.
+	 *
+	 * Likewise, an error clang counted is not one that stopped
+	 * anything.  pet passes over what it does not handle and clang
+	 * counts it all the same, so only an error that ended the
+	 * reading matters, and that one means the scop describes a
+	 * program that was not the one written.
 	 */
 	void call_fn(pet_scop *scop) {
 		if (!scop) {
-			error = true;
+			if (!options->autodetect)
+				error = true;
 			return;
 		}
-		if (diags.hasErrorOccurred()) {
-			error = true;
+		/* A scop built out of a source that could not be read
+		 * describes a program that was not the one written.
+		 */
+		if (diags.hasFatalErrorOccurred()) {
 			pet_scop_free(scop);
 			return;
 		}
@@ -1383,8 +1397,15 @@ static isl_stat emit_ast_for_C_source(isl_ctx *ctx, const char *filename,
 	add_predefines(PO, options->pencil);
 
 	FrontendOptions &FO = Clang->getFrontendOpts();
-	FO.Inputs.clear();
-	FO.Inputs.push_back(FrontendInputFile(filename, Language::C));
+	/* The driver worked out what language the file is written in, from
+	 * its name and from what the project builds it with, so what it
+	 * decided is kept.  Saying C here instead would have a unit of C++
+	 * read as C, and the declarations of one read that way do not line
+	 * up with the same declarations read as C++ when the units are
+	 * later linked.
+	 */
+	if (FO.Inputs.empty())
+		FO.Inputs.push_back(FrontendInputFile(filename, Language::C));
 	FO.OutputFile = output;
 
 	GeneratePCHAction action;

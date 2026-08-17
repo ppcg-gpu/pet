@@ -71,8 +71,17 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 	if (pet_linked_ast_n_refused(linked) != 0) {
+		int i, n = pet_linked_ast_n_refused(linked);
+
 		fprintf(stderr, "%s: %d declaration(s) could not be linked\n",
-			argv[0], pet_linked_ast_n_refused(linked));
+			argv[0], n);
+		/* Which ones, so that a link that did not come out whole
+		 * says what is missing from it rather than only how much.
+		 */
+		for (i = 0; i < n; ++i)
+			fprintf(stderr, "  %s: %s\n",
+				pet_linked_ast_refused(linked, i),
+				pet_linked_ast_refused_why(linked, i));
 		pet_ast_link_free(linked);
 		isl_ctx_free(ctx);
 		return EXIT_FAILURE;
