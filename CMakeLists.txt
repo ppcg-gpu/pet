@@ -145,6 +145,10 @@ target_link_libraries(pet_scop_cmp PRIVATE ${LIBYAML_LIBRARIES})
 
 add_pet_program(pet_emit_ast pet_emit_ast.c)
 add_pet_program(pet_ast_link pet_ast_link.cc)
+# emit.c holds the yaml writer, which is not part of the library.
+add_pet_program(pet_linked_scop pet_linked_scop.c emit.c)
+target_include_directories(pet_linked_scop PRIVATE ${LIBYAML_INCLUDE_DIRS})
+target_link_libraries(pet_linked_scop PRIVATE ${LIBYAML_LIBRARIES})
 # It reads the Clang headers directly, which pet only links privately.
 target_link_libraries(pet_ast_link PRIVATE clang_feature_tests)
 add_pet_program(pet_codegen pet_codegen.c)
@@ -267,6 +271,36 @@ add_ast_link_test(conflict conflict "incompatible_a;incompatible_b"
 add_ast_link_test(options_off options "conditional" expected-plain.txt)
 add_ast_link_test(options_on options "conditional" expected-defined.txt
     EMIT_ARGS -D WITH_HELPER)
+
+# Extract a scop from a linked corpus and compare it against a reference.
+#
+#   name      what the case is called
+#   corpus    directory under tests/ast_link
+#   units     base names, in the order they are linked
+#   function  the function to extract from
+#   expected  the reference scop, relative to the corpus
+function(add_linked_scop_test name corpus units function expected)
+    list(JOIN units "|" units_arg)
+    add_test(NAME PET_LinkedScop_${name}
+        COMMAND ${CMAKE_COMMAND}
+            -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+            -DEXTRACTOR=$<TARGET_FILE:pet_linked_scop>
+            -DCOMPARER=$<TARGET_FILE:pet_scop_cmp>
+            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/${corpus}
+            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/${name}
+            "-DUNITS=${units_arg}"
+            -DFUNCTION=${function}
+            -DEXPECTED=${expected}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLinkedScopTest.cmake
+    )
+endfunction()
+
+# A blur over a two dimensional image whose row pass lives in its own
+# translation unit.  Linked, the scop covers both loops and the statement
+# is the assignment inside the row pass; the caller on its own only has
+# the outer loop over an opaque call, and nothing to schedule inside it.
+add_linked_scop_test(blur app_blur "blur;blur_row" blur linked.scop)
+add_linked_scop_test(blur_unlinked app_blur "blur" blur alone.scop)
 
 #--------------------------------------------------------------------
 # PET Test Framework

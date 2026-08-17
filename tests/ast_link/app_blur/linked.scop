@@ -1,0 +1,149 @@
+start: 193
+end: 249
+indent: "\t"
+context: '{  :  }'
+schedule: '{ domain: "{ S_1[i] : 0 <= i <= 63; S_6[i, j] : 0 <= i <= 63 and 0 < j
+  <= 62; S_5[i] : 0 <= i <= 63; S_2[i] : 0 <= i <= 63; S_4[i] : 0 <= i <= 63; S_0[i]
+  : 0 <= i <= 63; S_3[i] : 0 <= i <= 63 }", child: { schedule: "L_0[{ S_1[i] -> [(i)];
+  S_6[i, j] -> [(i)]; S_5[i] -> [(i)]; S_2[i] -> [(i)]; S_4[i] -> [(i)]; S_0[i] ->
+  [(i)]; S_3[i] -> [(i)] }]", child: { sequence: [ { filter: "{ S_0[i] }" }, { filter:
+  "{ S_1[i] }" }, { filter: "{ S_3[i] }" }, { filter: "{ S_4[i] }" }, { filter: "{
+  S_6[i, j] }", child: { schedule: "L_1[{ S_6[i, j] -> [(j)] }]" } }, { filter: "{
+  S_5[i]; S_2[i] }", child: { set: [ { filter: "{ S_2[i] }" }, { filter: "{ S_5[i]
+  }" } ] } } ] } } }'
+arrays:
+- context: '{  :  }'
+  extent: '{ __pet_arg_0[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ __pet_arg_1[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ in[i0] : i0 >= 0 }'
+  element_type: float
+  element_size: 4
+- context: '{  :  }'
+  extent: '{ out[i0] : i0 >= 0 }'
+  element_type: float
+  element_size: 4
+statements:
+- line: -1
+  domain: '{ S_0[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '{ S_0[i] -> __pet_arg_0[] }'
+        index: '{ S_0[i] -> __pet_arg_0[] }'
+        kill: 1
+- line: -1
+  domain: '{ S_1[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_1[i] -> __pet_arg_0[] }'
+        read: 0
+        write: 1
+      - type: access
+        index: '{ S_1[i] -> [(i)] }'
+        read: 1
+        write: 0
+- line: -1
+  domain: '{ S_3[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '{ S_3[i] -> __pet_arg_1[] }'
+        index: '{ S_3[i] -> __pet_arg_1[] }'
+        kill: 1
+- line: -1
+  domain: '{ S_4[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_4[i] -> __pet_arg_1[] }'
+        read: 0
+        write: 1
+      - type: access
+        index: '{ S_4[i] -> [(i)] }'
+        read: 1
+        write: 0
+- line: 5
+  domain: '{ S_6[i, j] : 0 <= i <= 63 and 0 < j <= 62 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_6[i, j] -> out[(j)] }'
+        read: 0
+        write: 1
+      - type: op
+        operation: /
+        arguments:
+        - type: op
+          operation: +
+          arguments:
+          - type: op
+            operation: +
+            arguments:
+            - type: access
+              index: '{ S_6[i, j] -> in[(-1 + j)] }'
+              read: 1
+              write: 0
+            - type: access
+              index: '{ S_6[i, j] -> in[(j)] }'
+              read: 1
+              write: 0
+          - type: access
+            index: '{ S_6[i, j] -> in[(1 + j)] }'
+            read: 1
+            write: 0
+        - type: double
+          value: 3
+          string: 3.0f
+- line: -1
+  domain: '{ S_2[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '{ S_2[i] -> __pet_arg_0[] }'
+        index: '{ S_2[i] -> __pet_arg_0[] }'
+        kill: 1
+- line: -1
+  domain: '{ S_5[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '{ S_5[i] -> __pet_arg_1[] }'
+        index: '{ S_5[i] -> __pet_arg_1[] }'
+        kill: 1

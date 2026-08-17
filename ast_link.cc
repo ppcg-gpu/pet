@@ -118,6 +118,11 @@ clang::ASTContext &pet_linked_ast_context(struct pet_linked_ast *linked)
 	return linked->units[0]->getASTContext();
 }
 
+clang::Preprocessor &pet_linked_ast_preprocessor(struct pet_linked_ast *linked)
+{
+	return linked->units[0]->getPreprocessor();
+}
+
 int pet_linked_ast_n_refused(struct pet_linked_ast *linked)
 {
 	return linked->refused.size();

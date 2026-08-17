@@ -106,6 +106,7 @@
 
 #include <pet.h>
 
+#include "ast_link.h"
 #include "clang_compatibility.h"
 #include "id.h"
 #include "options.h"
@@ -1431,6 +1432,63 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	delete Clang;
 
 	return consumer.error ? isl_stat_error : isl_stat_ok;
+}
+
+/* Extract a pet_scop from the function called "function" in "linked".
+ *
+ * The units of a linked AST were read separately, and the pragmas that
+ * delimit a scop are consumed while reading, so there is nothing left in
+ * them to say where a scop begins.  The scops are therefore detected,
+ * which is what the autodetect option asks for anyway.
+ *
+ * The first function a scop can be extracted from is used when no name is
+ * given.  A function declared in one unit and defined in another is one
+ * entity here, so scanning reaches the body wherever it was written.
+ */
+__isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
+	struct pet_linked_ast *linked, const char *function)
+{
+	pet_options *options;
+	std::vector<Independent> independent;
+	struct pet_scop *scop = NULL;
+
+	options = isl_ctx_peek_pet_options(ctx);
+	if (!options)
+		isl_die(ctx, isl_error_invalid, "no pet options found",
+			return NULL);
+	if (!options->autodetect)
+		isl_die(ctx, isl_error_unsupported,
+			"extracting from a linked AST requires autodetect",
+			return NULL);
+
+	ASTContext &ast_context = pet_linked_ast_context(linked);
+	Preprocessor &PP = pet_linked_ast_preprocessor(linked);
+	isl_union_map *vb;
+
+	vb = isl_union_map_empty(isl_space_params_alloc(ctx, 0));
+
+	for (Decl *d : ast_context.getTranslationUnitDecl()->decls()) {
+		FunctionDecl *fd = dyn_cast<FunctionDecl>(d);
+		const FunctionDecl *def;
+
+		if (!fd || !fd->hasBody(def))
+			continue;
+		if (function &&
+		    fd->getNameInfo().getAsString() != function)
+			continue;
+
+		FunctionDecl *body = const_cast<FunctionDecl *>(def);
+		ScopLoc loc;
+		PetScan ps(PP, ast_context, body, loc, options,
+			isl_union_map_copy(vb), independent);
+		scop = ps.scan(body);
+		if (scop)
+			break;
+	}
+
+	isl_union_map_free(vb);
+
+	return scop;
 }
 
 /* Serialise the AST of the C source file "input" to the file "output".

@@ -1,0 +1,40 @@
+start: 193
+end: 249
+indent: "\t"
+context: '{  :  }'
+schedule: '{ domain: "{ S_0[i] : 0 <= i <= 63 }", child: { schedule: "L_0[{ S_0[i]
+  -> [(i)] }]" } }'
+arrays:
+- context: '{  :  }'
+  extent: '{ in[i0, i1] : i0 >= 0 and 0 <= i1 <= 63 }'
+  element_type: float
+  element_size: 4
+- context: '{  :  }'
+  extent: '{ out[i0, i1] : i0 >= 0 and 0 <= i1 <= 63 }'
+  element_type: float
+  element_size: 4
+statements:
+- line: 8
+  domain: '{ S_0[i] : 0 <= i <= 63 }'
+  body:
+    type: expression
+    expr:
+      type: call
+      name: blur_row
+      arguments:
+      - type: access
+        may_read: '{ S_0[i] -> out[i, o1] }'
+        may_write: '{ S_0[i] -> out[i, o1] }'
+        must_write: '{  }'
+        index: '{ S_0[i] -> out[(i)] }'
+        depth: 2
+        read: 1
+        write: 1
+      - type: access
+        may_read: '{ S_0[i] -> in[i, o1] }'
+        may_write: '{ S_0[i] -> in[i, o1] }'
+        must_write: '{  }'
+        index: '{ S_0[i] -> in[(i)] }'
+        depth: 2
+        read: 1
+        write: 1

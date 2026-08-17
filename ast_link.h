@@ -1,8 +1,6 @@
 #ifndef PET_AST_LINK_H
 #define PET_AST_LINK_H
 
-#include <clang/AST/ASTContext.h>
-
 /* Linking of the ASTs of several translation units into a single AST.
  *
  * This is the counterpart of what a linker does to object files, at the
@@ -20,6 +18,11 @@
  * A call whose callee is defined in none of the linked units simply stays
  * unresolved, exactly as an undefined symbol would.
  */
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
 struct pet_linked_ast;
 
 /* Link the translation units serialised in the "n" files in "files".
@@ -28,10 +31,6 @@ struct pet_linked_ast;
  */
 struct pet_linked_ast *pet_ast_link(const char **files, int n);
 void pet_ast_link_free(struct pet_linked_ast *linked);
-
-/* The context holding the linked AST.
- */
-clang::ASTContext &pet_linked_ast_context(struct pet_linked_ast *linked);
 
 /* The number of declarations that could not be imported.  Anything other
  * than zero means the result is not a faithful link: the declarations are
@@ -44,5 +43,21 @@ int pet_linked_ast_n_refused(struct pet_linked_ast *linked);
  * diagnostic output as the link proceeds; this says what was lost.
  */
 const char *pet_linked_ast_refused(struct pet_linked_ast *linked, int i);
+
+#if defined(__cplusplus)
+}
+
+#include <clang/AST/ASTContext.h>
+#include <clang/Lex/Preprocessor.h>
+
+/* The context holding the linked AST.
+ */
+clang::ASTContext &pet_linked_ast_context(struct pet_linked_ast *linked);
+
+/* The preprocessor of the unit everything was linked into.  Whatever
+ * reads the linked AST needs it to make sense of source locations.
+ */
+clang::Preprocessor &pet_linked_ast_preprocessor(struct pet_linked_ast *linked);
+#endif
 
 #endif

@@ -544,6 +544,16 @@ int pet_op_is_inc_dec(enum pet_op_type op);
  */
 int pet_emit_ast(isl_ctx *ctx, const char *input, const char *output);
 
+/* Extract a pet_scop from the function called "function" in a linked AST,
+ * or from the first function one can be extracted from if "function" is
+ * NULL.  Since the scop delimiting pragmas are consumed while a file is
+ * being read and are not part of a serialised unit, this requires the
+ * autodetect option.
+ */
+struct pet_linked_ast;
+__isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
+	struct pet_linked_ast *linked, const char *function);
+
 /* Extract a pet_scop from a C source file.
  * If function is not NULL, then the pet_scop is extracted from
  * a function with that name.
