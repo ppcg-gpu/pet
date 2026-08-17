@@ -42,7 +42,7 @@ using namespace clang;
  */
 __isl_give isl_id *pet_id_from_decl(isl_ctx *ctx, ValueDecl *decl)
 {
-	return isl_id_alloc(ctx, decl->getName().str().c_str(), decl);
+	return isl_id_alloc(ctx, decl->getNameAsString().c_str(), decl);
 }
 
 /* Create an isl_id that refers to the variable declarator "decl", but

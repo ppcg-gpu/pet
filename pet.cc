@@ -220,7 +220,7 @@ struct PragmaValueBoundsHandler : public PragmaHandler {
 		map = isl_map_universe(dim);
 		map = isl_map_lower_bound_si(map, isl_dim_out, 0, lb);
 		map = isl_map_upper_bound_si(map, isl_dim_out, 0, ub);
-		id = isl_id_alloc(ctx, vd->getName().str().c_str(), vd);
+		id = isl_id_alloc(ctx, vd->getNameAsString().c_str(), vd);
 		map = isl_map_set_tuple_id(map, isl_dim_in, id);
 
 		value_bounds = isl_union_map_add_map(value_bounds, map);
@@ -256,7 +256,7 @@ static __isl_give isl_set *extract_initialization(__isl_take isl_set *value,
 		return value;
 
 	ctx = isl_set_get_ctx(value);
-	id = isl_id_alloc(ctx, vd->getName().str().c_str(), vd);
+	id = isl_id_alloc(ctx, vd->getNameAsString().c_str(), vd);
 	space = isl_space_params_alloc(ctx, 1);
 	space = isl_space_set_dim_id(space, isl_dim_param, 0, id);
 	set = isl_set_universe(space);
@@ -323,7 +323,7 @@ struct PragmaParameterHandler : public PragmaHandler {
 			return;
 		}
 
-		id = isl_id_alloc(ctx, vd->getName().str().c_str(), vd);
+		id = isl_id_alloc(ctx, vd->getNameAsString().c_str(), vd);
 		dim = isl_space_params_alloc(ctx, 1);
 		dim = isl_space_set_dim_id(dim, isl_dim_param, 0, id);
 

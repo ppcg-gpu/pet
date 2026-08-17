@@ -31,7 +31,7 @@ struct call_collector : RecursiveASTVisitor<call_collector> {
 		if (!fd)
 			return true;
 		const FunctionDecl *def = NULL;
-		std::string name = fd->getName().str();
+		std::string name = fd->getNameAsString();
 		bool has = fd->hasBody(def);
 		/* A name is only reported as resolved if every call to it
 		 * reaches a body.
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 	std::map<std::string, int> internal;
 	for (Decl *d : ctx.getTranslationUnitDecl()->decls()) {
 		if (auto *rd = dyn_cast<RecordDecl>(d)) {
-			if (rd->getName().empty())
+			if (rd->getNameAsString().empty())
 				continue;
 			/* The canonical declaration, rather than the
 			 * canonical type: what is being asked is
@@ -96,14 +96,14 @@ int main(int argc, char **argv)
 			 * getting at the type, and clang has renamed
 			 * that more than once.
 			 */
-			records[rd->getName().str()].insert(
+			records[rd->getNameAsString()].insert(
 				(const void *) rd->getCanonicalDecl());
 		} else if (auto *fd = dyn_cast<FunctionDecl>(d)) {
 			if (fd->getFormalLinkage() != Linkage::Internal)
 				continue;
 			if (!fd->doesThisDeclarationHaveABody())
 				continue;
-			internal[fd->getName().str()]++;
+			internal[fd->getNameAsString()]++;
 		}
 	}
 

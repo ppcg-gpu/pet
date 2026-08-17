@@ -158,10 +158,30 @@ static enum pet_op_type BinaryOperatorKind2pet_op_type(BinaryOperatorKind kind)
 	}
 }
 
+/* Is the size of "type" a thing the compiler can be asked about?
+ *
+ * Asking for the size of a type that is not complete means asking for
+ * the layout of a record whose fields are not known, which is a fatal
+ * error rather than a question with an empty answer.  A type declared
+ * and not defined, and one that is still written in terms of a template
+ * parameter, are both of that kind.
+ */
+static bool has_known_size(QualType type)
+{
+	if (type.isNull())
+		return false;
+
+	return !type->isIncompleteType() && !type->isDependentType() &&
+		!type->isUndeducedType();
+}
+
 #ifdef GETTYPEINFORETURNSTYPEINFO
 
 static int size_in_bytes(ASTContext &context, QualType type)
 {
+	if (!has_known_size(type))
+		return 0;
+
 	return context.getTypeInfo(type).Width / 8;
 }
 
@@ -169,6 +189,9 @@ static int size_in_bytes(ASTContext &context, QualType type)
 
 static int size_in_bytes(ASTContext &context, QualType type)
 {
+	if (!has_known_size(type))
+		return 0;
+
 	return context.getTypeInfo(type).first / 8;
 }
 
@@ -926,11 +949,20 @@ __isl_give pet_expr *PetScan::extract_argument(FunctionDecl *fd, int pos,
 			report_prototype_required(expr);
 			return pet_expr_free(res);
 		}
+		/* An argument passed through the ellipsis of a variadic
+		 * function has no parameter it corresponds to, so nothing
+		 * says it is only read.
+		 */
+		if (pos >= fd->getNumParams()) {
+			res = mark_may_write(res);
+			goto done;
+		}
 		parm = fd->getParamDecl(pos);
 		if (!const_base(parm->getType()))
 			res = mark_may_write(res);
 	}
 
+done:
 	if (is_addr)
 		res = pet_expr_new_unary(0, pet_op_address_of, res);
 	return res;
@@ -951,7 +983,7 @@ FunctionDecl *PetScan::find_decl_from_name(CallExpr *call, string name)
 		FunctionDecl *fd = dyn_cast<FunctionDecl>(*i);
 		if (!fd)
 			continue;
-		if (fd->getName().str().compare(name) != 0)
+		if (fd->getNameAsString().compare(name) != 0)
 			continue;
 		if (fd->hasBody())
 			return fd;
@@ -1490,7 +1522,7 @@ void PetScan::collect_declared_names()
 		if (!isa<NamedDecl>(D))
 			continue;
 		named = cast<NamedDecl>(D);
-		declared_names.insert(named->getName().str());
+		declared_names.insert(named->getNameAsString());
 	}
 
 	declared_names_collected = true;
@@ -1537,7 +1569,7 @@ bool PetScan::name_in_use(const string &name, Decl *decl)
 			if (!isa<NamedDecl>(D))
 				continue;
 			named = cast<NamedDecl>(D);
-			if (named->getName().str() == name)
+			if (named->getNameAsString() == name)
 				return true;
 		}
 	}
@@ -1589,7 +1621,7 @@ __isl_give pet_tree *PetScan::extract(CompoundStmt *stmt,
 		isl_id *id;
 		pet_expr *expr;
 		VarDecl *decl = *it;
-		string name = decl->getName().str();
+		string name = decl->getNameAsString();
 		bool in_use = name_in_use(name, decl);
 
 		used_names.insert(name);
@@ -1883,7 +1915,7 @@ int PetScan::set_inliner_arguments(pet_inliner &inliner, CallExpr *call,
 
 		arg = call->getArg(i);
 		if (pet_clang_array_depth(type) == 0) {
-			string name = parm->getName().str();
+			string name = parm->getNameAsString();
 			if (name_in_use(name, NULL))
 				name = generate_new_name(name);
 			used_names.insert(name);
@@ -3090,18 +3122,44 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id_list *decls,
 
 static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	RecordDecl *decl, Preprocessor &PP, PetTypes &types,
-	std::set<TypeDecl *> &types_done);
+	std::set<TypeDecl *> &types_done, int &n_alloc);
 static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	TypedefNameDecl *decl, Preprocessor &PP, PetTypes &types,
-	std::set<TypeDecl *> &types_done);
+	std::set<TypeDecl *> &types_done, int &n_alloc);
 
 /* For each of the fields of "decl" that is itself a record type
  * or a typedef, or an array of such type, add a corresponding pet_type
  * to "scop".
  */
+/* Make room in "scop" for one more type.
+ *
+ * The types are counted before they are added, but adding one adds the
+ * types of its fields as well, and those were not counted: a structure
+ * whose field is a structure of its own reaches further than the count
+ * of what was named directly.  So the room is made as it is needed.
+ */
+static struct pet_scop *grow_types(isl_ctx *ctx, struct pet_scop *scop,
+	int &n_alloc)
+{
+	struct pet_type **types;
+	int n;
+
+	if (scop->n_type < n_alloc)
+		return scop;
+
+	n = n_alloc ? 2 * n_alloc : 4;
+	types = isl_realloc_array(ctx, scop->types, struct pet_type *, n);
+	if (!types)
+		return pet_scop_free(scop);
+	scop->types = types;
+	n_alloc = n;
+
+	return scop;
+}
+
 static struct pet_scop *add_field_types(isl_ctx *ctx, struct pet_scop *scop,
 	RecordDecl *decl, Preprocessor &PP, PetTypes &types,
-	std::set<TypeDecl *> &types_done)
+	std::set<TypeDecl *> &types_done, int &n_alloc)
 {
 	RecordDecl::field_iterator it;
 
@@ -3114,13 +3172,13 @@ static struct pet_scop *add_field_types(isl_ctx *ctx, struct pet_scop *scop,
 
 			typedefdecl = cast<TypedefType>(type)->getDecl();
 			scop = add_type(ctx, scop, typedefdecl,
-				PP, types, types_done);
+				PP, types, types_done, n_alloc);
 		} else if (type->isRecordType()) {
 			RecordDecl *record;
 
 			record = pet_clang_record_decl(type);
 			scop = add_type(ctx, scop, record,
-				PP, types, types_done);
+				PP, types, types_done, n_alloc);
 		}
 	}
 
@@ -3139,7 +3197,7 @@ static struct pet_scop *add_field_types(isl_ctx *ctx, struct pet_scop *scop,
  */
 static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	RecordDecl *decl, Preprocessor &PP, PetTypes &types,
-	std::set<TypeDecl *> &types_done)
+	std::set<TypeDecl *> &types_done, int &n_alloc)
 {
 	string s;
 	llvm::raw_string_ostream S(s);
@@ -3149,16 +3207,22 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	if (types_done.find(decl) != types_done.end())
 		return scop;
 
-	add_field_types(ctx, scop, decl, PP, types, types_done);
+	scop = add_field_types(ctx, scop, decl, PP, types, types_done,
+				n_alloc);
+	if (!scop)
+		return NULL;
 
-	if (strlen(decl->getName().str().c_str()) == 0)
+	if (decl->getNameAsString().empty())
 		return scop;
 
 	decl->print(S, PrintingPolicy(PP.getLangOpts()));
 	S.str();
 
+	scop = grow_types(ctx, scop, n_alloc);
+	if (!scop)
+		return NULL;
 	scop->types[scop->n_type] = pet_type_alloc(ctx,
-				    decl->getName().str().c_str(), s.c_str());
+				    decl->getNameAsString().c_str(), s.c_str());
 	if (!scop->types[scop->n_type])
 		return pet_scop_free(scop);
 
@@ -3183,7 +3247,7 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
  */
 static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	TypedefNameDecl *decl, Preprocessor &PP, PetTypes &types,
-	std::set<TypeDecl *> &types_done)
+	std::set<TypeDecl *> &types_done, int &n_alloc)
 {
 	string s;
 	llvm::raw_string_ostream S(s);
@@ -3197,19 +3261,25 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	if (qt->isRecordType()) {
 		RecordDecl *rec = pet_clang_record_decl(qt);
 
-		add_field_types(ctx, scop, rec, PP, types, types_done);
+		scop = add_field_types(ctx, scop, rec, PP, types,
+					types_done, n_alloc);
+		if (!scop)
+			return NULL;
 		S << "typedef ";
 		rec->print(S, PrintingPolicy(PP.getLangOpts()));
 		S << " ";
-		S << decl->getName();
+		S << decl->getNameAsString();
 		types_done.insert(rec);
 	} else {
 		decl->print(S, PrintingPolicy(PP.getLangOpts()));
 	}
 	S.str();
 
+	scop = grow_types(ctx, scop, n_alloc);
+	if (!scop)
+		return NULL;
 	scop->types[scop->n_type] = pet_type_alloc(ctx,
-				    decl->getName().str().c_str(), s.c_str());
+				    decl->getNameAsString().c_str(), s.c_str());
 	if (!scop->types[scop->n_type])
 		return pet_scop_free(scop);
 
@@ -3248,7 +3318,7 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 struct pet_scop *PetScan::scan_arrays(struct pet_scop *scop,
 	__isl_keep pet_context *pc)
 {
-	int i, n;
+	int i, n, n_alloc;
 	array_desc_set arrays, has_sub;
 	array_desc_set::iterator it;
 	PetTypes types;
@@ -3299,17 +3369,20 @@ struct pet_scop *PetScan::scan_arrays(struct pet_scop *scop,
 	if (n == 0)
 		return scop;
 
-	scop->types = isl_alloc_array(ctx, struct pet_type *, n);
+	n_alloc = n;
+	scop->types = isl_alloc_array(ctx, struct pet_type *, n_alloc);
 	if (!scop->types)
 		goto error;
 
 	for (typedefs_it = types.typedefs.begin();
 	     typedefs_it != types.typedefs.end(); ++typedefs_it)
-		scop = add_type(ctx, scop, *typedefs_it, PP, types, types_done);
+		scop = add_type(ctx, scop, *typedefs_it, PP, types,
+				types_done, n_alloc);
 
 	for (records_it = types.records.begin();
 	     records_it != types.records.end(); ++records_it)
-		scop = add_type(ctx, scop, *records_it, PP, types, types_done);
+		scop = add_type(ctx, scop, *records_it, PP, types,
+				types_done, n_alloc);
 
 	return scop;
 error:
