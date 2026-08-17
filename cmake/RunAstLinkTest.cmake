@@ -1,19 +1,25 @@
 # Drive one AST linking test.
 #
-# Serialises the named translation units of a corpus, links them and
-# compares the report against the expected one.  The report mentions no
-# paths, so the comparison is exact rather than fuzzy.
+# Serialises the named translation units of a corpus with pet's own
+# emitter, links them and compares the report against the expected one.
+# The report mentions no paths, so the comparison is exact rather than
+# fuzzy.
 #
-#   CLANG        the compiler used to serialise the units
+# The units are deliberately not serialised by running the compiler: they
+# have to be read with the include paths, the macros and the predefines
+# pet uses, or they describe a different program than the one pet sees.
+#
+#   EMITTER      the pet_emit_ast program
 #   LINKER       the pet_ast_link program
 #   SRCDIR       directory holding the corpus
 #   BINDIR       directory to place the serialised units and the output in
 #   UNITS        '|' separated base names, in the order they are linked;
 #                the first one is the unit the others are linked into
 #   EXPECTED     file holding the expected report
+#   EMIT_ARGS    '|' separated extra options for the emitter, such as -D
 #   EXPECT_FAIL  set when the link is meant to be rejected
 
-foreach(required CLANG LINKER SRCDIR BINDIR UNITS EXPECTED)
+foreach(required EMITTER LINKER SRCDIR BINDIR UNITS EXPECTED)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
         message(FATAL_ERROR "RunAstLinkTest: ${required} is required")
     endif()
@@ -23,12 +29,16 @@ file(REMOVE_RECURSE "${BINDIR}")
 file(MAKE_DIRECTORY "${BINDIR}")
 
 string(REPLACE "|" ";" units "${UNITS}")
+set(emit_args "")
+if(DEFINED EMIT_ARGS AND NOT "${EMIT_ARGS}" STREQUAL "")
+    string(REPLACE "|" ";" emit_args "${EMIT_ARGS}")
+endif()
 
 set(asts "")
 foreach(unit ${units})
     execute_process(
-        COMMAND "${CLANG}" -emit-ast -I "${SRCDIR}"
-                -o "${BINDIR}/${unit}.ast" "${SRCDIR}/${unit}.c"
+        COMMAND "${EMITTER}" -I "${SRCDIR}" ${emit_args}
+                "${SRCDIR}/${unit}.c" "${BINDIR}/${unit}.ast"
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)

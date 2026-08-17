@@ -98,6 +98,7 @@
 #include <clang/Sema/Sema.h>
 #include <clang/Sema/SemaDiagnostic.h>
 #include <clang/Parse/Parser.h>
+#include <clang/Frontend/FrontendActions.h>
 #include <clang/Parse/ParseAST.h>
 
 #include <isl/ctx.h>
@@ -1259,6 +1260,60 @@ static void create_configured_diagnostics(CompilerInstance *Clang)
 	set_implicit_function_declaration_no_error(Diags);
 }
 
+/* Serialise the AST of the C source file called "filename" to "output".
+ *
+ * The point of doing this here rather than by running the compiler is
+ * that the units that are going to be linked have to be read the way pet
+ * reads them: with the include paths and the macros it was given, and
+ * with its own predefines.  A unit serialised with a different
+ * preprocessor state describes a different program.
+ *
+ * The instance is configured exactly as it is for reading, except that
+ * the file manager and the source manager are left to the action, which
+ * creates them itself.
+ */
+static isl_stat emit_ast_for_C_source(isl_ctx *ctx, const char *filename,
+	const char *output, pet_options *options)
+{
+	CompilerInstance *Clang = new CompilerInstance();
+	create_configured_diagnostics(Clang);
+	CompilerInvocation *invocation =
+		construct_invocation(filename, Clang->getDiagnostics());
+	if (invocation) {
+		set_invocation(Clang, invocation);
+		create_configured_diagnostics(Clang);
+	}
+	TargetInfo *target = create_target_info(Clang,
+						Clang->getDiagnostics());
+	Clang->setTarget(target);
+	if (!invocation)
+		set_lang_defaults(Clang);
+	Clang->getDiagnostics().setClient(
+			construct_printer(Clang, options->pencil));
+
+	HeaderSearchOptions &HSO = Clang->getHeaderSearchOpts();
+	HSO.ResourceDir = ResourceDir;
+	for (int i = 0; i < options->n_path; ++i)
+		add_path(HSO, options->paths[i]);
+	PreprocessorOptions &PO = Clang->getPreprocessorOpts();
+	for (int i = 0; i < options->n_define; ++i)
+		PO.addMacroDef(options->defines[i]);
+	add_predefines(PO, options->pencil);
+
+	FrontendOptions &FO = Clang->getFrontendOpts();
+	FO.Inputs.clear();
+	FO.Inputs.push_back(FrontendInputFile(filename, Language::C));
+	FO.OutputFile = output;
+
+	GeneratePCHAction action;
+	bool ok = Clang->ExecuteAction(action);
+
+	delete Clang;
+
+	return ok ? isl_stat_ok : isl_stat_error;
+}
+
+
 /* Extract a pet_scop from each function in the C source file called "filename".
  * Each detected scop is passed to "fn".
  * If "function" is not NULL, only extract a pet_scop from the function
@@ -1376,6 +1431,28 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	delete Clang;
 
 	return consumer.error ? isl_stat_error : isl_stat_ok;
+}
+
+/* Serialise the AST of the C source file "input" to the file "output".
+ *
+ * The options are the ones the context was given, so that the unit is
+ * read with the include paths, the macros and the predefines that pet
+ * itself would use.
+ */
+int pet_emit_ast(isl_ctx *ctx, const char *input, const char *output)
+{
+	pet_options *options;
+	isl_stat r;
+
+	options = isl_ctx_peek_pet_options(ctx);
+	if (!options)
+		isl_die(ctx, isl_error_invalid,
+			"no pet options found", return -1);
+
+	r = emit_ast_for_C_source(ctx, input, output, options);
+	llvm::llvm_shutdown();
+
+	return r == isl_stat_ok ? 0 : -1;
 }
 
 /* Extract a pet_scop from each function in the C source file called "filename".

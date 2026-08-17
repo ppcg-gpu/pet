@@ -538,6 +538,12 @@ typedef struct pet_scop pet_scop;
 const char *pet_op_str(enum pet_op_type op);
 int pet_op_is_inc_dec(enum pet_op_type op);
 
+/* Serialise the AST of the C source file "input" to the file "output",
+ * reading it the way pet reads a file it is asked to extract from.  This
+ * is what produces the units that pet_ast_link links.
+ */
+int pet_emit_ast(isl_ctx *ctx, const char *input, const char *output);
+
 /* Extract a pet_scop from a C source file.
  * If function is not NULL, then the pet_scop is extracted from
  * a function with that name.

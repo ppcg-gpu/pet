@@ -143,6 +143,7 @@ add_pet_program(pet_scop_cmp parse.c pet_scop_cmp.c)
 target_include_directories(pet_scop_cmp PRIVATE ${LIBYAML_INCLUDE_DIRS})
 target_link_libraries(pet_scop_cmp PRIVATE ${LIBYAML_LIBRARIES})
 
+add_pet_program(pet_emit_ast pet_emit_ast.c)
 add_pet_program(pet_ast_link pet_ast_link.cc)
 # It reads the Clang headers directly, which pet only links privately.
 target_link_libraries(pet_ast_link PRIVATE clang_feature_tests)
@@ -205,42 +206,43 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_outputs")
 # AST linking
 #--------------------------------------------------------------------
 
-# Serialising the corpus needs a compiler that writes the same AST format
-# as the libraries pet is built against.
-find_program(CLANG_EXECUTABLE clang HINTS ${LLVM_TOOLS_BINARY_DIR})
-
 # Link the units of a corpus and check the report against "expected".
 #
 #   name      what the property being checked is called
 #   corpus    directory under tests/ast_link
 #   units     base names, in the order they are linked
 #   expected  the expected report, relative to the corpus
-#   ARGN      "EXPECT_FAIL" when the link is meant to be rejected
+#   ARGN      "EXPECT_FAIL" when the link is meant to be rejected, and
+#             "EMIT_ARGS" followed by options for the emitter
 function(add_ast_link_test name corpus units expected)
-    if(NOT CLANG_EXECUTABLE)
-        return()
-    endif()
     set(expect_fail 0)
-    if("EXPECT_FAIL" IN_LIST ARGN)
-        set(expect_fail 1)
-    endif()
+    set(emit_args "")
+    set(collecting 0)
+    foreach(arg ${ARGN})
+        if(arg STREQUAL "EXPECT_FAIL")
+            set(expect_fail 1)
+            set(collecting 0)
+        elseif(arg STREQUAL "EMIT_ARGS")
+            set(collecting 1)
+        elseif(collecting)
+            list(APPEND emit_args ${arg})
+        endif()
+    endforeach()
     list(JOIN units "|" units_arg)
+    list(JOIN emit_args "|" emit_args_arg)
     add_test(NAME PET_AstLink_${name}
         COMMAND ${CMAKE_COMMAND}
-            -DCLANG=${CLANG_EXECUTABLE}
+            -DEMITTER=$<TARGET_FILE:pet_emit_ast>
             -DLINKER=$<TARGET_FILE:pet_ast_link>
             -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/${corpus}
             -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/${name}
             "-DUNITS=${units_arg}"
+            "-DEMIT_ARGS=${emit_args_arg}"
             -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/${corpus}/${expected}
             -DEXPECT_FAIL=${expect_fail}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
     )
 endfunction()
-
-if(NOT CLANG_EXECUTABLE)
-    message(STATUS "clang not found. The AST linking tests will be skipped.")
-endif()
 
 # A call to a function defined in another unit reaches its definition, two
 # static functions sharing a name stay distinct, and the struct described
@@ -257,6 +259,14 @@ add_ast_link_test(incomplete merge "total" expected-total-only.txt)
 # involved are refused by name and the link is rejected.
 add_ast_link_test(conflict conflict "incompatible_a;incompatible_b"
     expected.txt EXPECT_FAIL)
+
+# The units are serialised by pet rather than by running the compiler,
+# so that they are read with the options pet was given.  The same source
+# describes a different program depending on a macro, and the linked AST
+# has to show it.
+add_ast_link_test(options_off options "conditional" expected-plain.txt)
+add_ast_link_test(options_on options "conditional" expected-defined.txt
+    EMIT_ARGS -D WITH_HELPER)
 
 #--------------------------------------------------------------------
 # PET Test Framework
