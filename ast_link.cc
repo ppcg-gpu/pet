@@ -154,10 +154,92 @@ static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
  * one.
  */
 struct link_importer : public ASTImporter {
-	using ASTImporter::ASTImporter;
+	link_importer(ASTContext &ToContext, FileManager &ToFileManager,
+			ASTContext &FromContext, FileManager &FromFileManager,
+			bool MinimalImport,
+			std::shared_ptr<ASTImporterSharedState> SharedState,
+			unsigned unit)
+		: ASTImporter(ToContext, ToFileManager, FromContext,
+				FromFileManager, MinimalImport, SharedState),
+		  unit(unit) {}
 
 protected:
 	Expected<Decl *> ImportImpl(Decl *From) override {
+		/* A declaration that only its own unit can name is that
+		 * unit's own, and another unit is free to have one of the
+		 * same name meaning something else: two files may each
+		 * define a static function called clamp and mean different
+		 * functions by it.  Brought into one unit they become one
+		 * name used twice, which is not a program, so the one
+		 * arriving is given a name of its own, which is what a
+		 * linker does with a local symbol.
+		 *
+		 * The name is put on the declaration being imported rather
+		 * than on the one that comes out, because the importer
+		 * builds that one from this one and there is no moment in
+		 * between.  It is put back afterwards, since the unit it
+		 * came from is not ours to alter.
+		 */
+		NamedDecl *named = dyn_cast<NamedDecl>(From);
+		DeclarationName saved;
+		bool renamed = false;
+
+		if (named && needs_own_name(named)) {
+			saved = named->getDeclName();
+			named->setDeclName(own_name(named));
+			renamed = true;
+		}
+
+		Expected<Decl *> res = import_or_unify(From);
+
+		if (renamed)
+			named->setDeclName(saved);
+
+		return res;
+	}
+
+private:
+	unsigned unit;
+
+	/* Does "named" have to be given a name of its own?
+	 *
+	 * Only what no other unit can name, and only where the target
+	 * has the name already: the first unit to use a name keeps it.
+	 */
+	bool needs_own_name(NamedDecl *named) {
+		if (!named->getIdentifier())
+			return false;
+		if (!named->getDeclContext()->isTranslationUnit())
+			return false;
+		if (named->hasExternalFormalLinkage())
+			return false;
+		if (named->getFormalLinkage() != Linkage::Internal)
+			return false;
+
+		DeclarationName name(&getToContext().Idents.get(
+					named->getName()));
+
+		return !getToContext().getTranslationUnitDecl()->lookup(
+					name).empty();
+	}
+
+	/* A name no declaration of the target has.
+	 */
+	DeclarationName own_name(NamedDecl *named) {
+		std::string base = named->getNameAsString();
+
+		for (unsigned n = unit; ; ++n) {
+			std::string tried = base + "__" + std::to_string(n);
+			DeclarationName name(&getToContext().Idents.get(tried));
+
+			if (getToContext().getTranslationUnitDecl()->lookup(
+						name).empty())
+				return DeclarationName(
+					&getFromContext().Idents.get(tried));
+		}
+	}
+
+	Expected<Decl *> import_or_unify(Decl *From) {
 		auto res = ASTImporter::ImportImpl(From);
 		if (res)
 			return res;
@@ -337,7 +419,7 @@ static void link_unit(struct pet_linked_ast *linked, ASTUnit *src)
 	link_importer importer(target->getASTContext(),
 		target->getFileManager(), src->getASTContext(),
 		src->getFileManager(), /*MinimalImport=*/false,
-		linked->shared);
+		linked->shared, linked->units.size());
 
 	for (Decl *d : src->getASTContext().getTranslationUnitDecl()->decls()) {
 		auto res = importer.Import(d);

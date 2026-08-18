@@ -1,9 +1,11 @@
 call clamp resolved
+call clamp__2 resolved
 call scale resolved
 call sum resolved
 record Matrix 1
-internal clamp 2
+internal clamp 1
+internal clamp__2 1
 units 3
 refused 0
-calls 3 resolved 3 unresolved 0
+calls 4 resolved 4 unresolved 0
 records 1 split 0

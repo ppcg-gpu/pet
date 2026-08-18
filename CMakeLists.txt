@@ -328,6 +328,28 @@ add_test(NAME PET_CompileCommands
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunCompileCommandsTest.cmake
 )
 
+# The link turned into a program and run against the same program built
+# the ordinary way.  Counting what was resolved cannot see a link that
+# holds two definitions of one name; building it can.
+find_program(CLANG_FOR_IR NAMES clang clang-22 clang-21 clang-20)
+if(CLANG_FOR_IR)
+    add_test(NAME PET_LinkedIr_merge
+        COMMAND ${CMAKE_COMMAND}
+            -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+            -DIR=$<TARGET_FILE:pet_linked_ir>
+            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/merge
+            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_ir/merge
+            "-DUNITS=total|sum|scale"
+            -DDRIVER=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/merge/driver.c
+            -DCC=${CMAKE_C_COMPILER}
+            -DLLC=${CLANG_FOR_IR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLinkedIrTest.cmake
+    )
+else()
+    message(STATUS "No clang to read LLVM IR with. The program a link "
+        "describes will not be built.")
+endif()
+
 # A blur over a two dimensional image whose row pass lives in its own
 # translation unit.  Linked, the scop covers both loops and the statement
 # is the assignment inside the row pass; the caller on its own only has
