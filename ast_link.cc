@@ -48,6 +48,17 @@ struct pet_linked_ast {
 	IntrusiveRefCntPtr<DiagnosticOptions> diag_opts;
 #endif
 	IntrusiveRefCntPtr<DiagnosticsEngine> diags;
+	/* One for each unit that is read.
+	 *
+	 * A unit takes the engine it is read with and hands it its own
+	 * source manager, so an engine shared between units ends up
+	 * holding the last one's.  Everything clang then says about a
+	 * declaration of any other unit is said against locations that
+	 * manager does not have, and it does not merely say it wrongly:
+	 * working out how serious a diagnostic is means looking its
+	 * location up, and looking up a location from elsewhere asserts.
+	 */
+	std::vector<IntrusiveRefCntPtr<DiagnosticsEngine> > unit_diags;
 	std::vector<std::string> refused;
 	std::vector<std::string> refused_why;
 };
@@ -98,6 +109,28 @@ static void make_diagnostics(struct pet_linked_ast *linked)
 
 #endif
 
+/* An engine of its own for the unit about to be read.
+ */
+static IntrusiveRefCntPtr<DiagnosticsEngine> unit_diagnostics(
+	struct pet_linked_ast *linked)
+{
+	IntrusiveRefCntPtr<DiagnosticIDs> ids(new DiagnosticIDs());
+	IntrusiveRefCntPtr<DiagnosticsEngine> diags;
+
+#ifdef DIAGNOSTICSENGINE_TAKES_DIAGOPTIONS_REFERENCE
+	diags = new DiagnosticsEngine(ids, *linked->diag_opts,
+			new TextDiagnosticPrinter(llvm::errs(),
+						*linked->diag_opts));
+#else
+	diags = new DiagnosticsEngine(ids, linked->diag_opts,
+			new TextDiagnosticPrinter(llvm::errs(),
+						&*linked->diag_opts));
+#endif
+	linked->unit_diags.push_back(diags);
+
+	return diags;
+}
+
 #ifdef LOADFROMASTFILE_TAKES_VFS_FIRST
 
 static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
@@ -108,7 +141,7 @@ static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
 
 	return ASTUnit::LoadFromASTFile(file, RawPCHContainerReader(),
 		ASTUnit::LoadEverything, llvm::vfs::getRealFileSystem(),
-		linked->diag_opts, linked->diags, fs_opts, hs_opts);
+		linked->diag_opts, unit_diagnostics(linked), fs_opts, hs_opts);
 }
 
 #else
@@ -121,7 +154,8 @@ static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
 		std::make_shared<HeaderSearchOptions>();
 
 	return ASTUnit::LoadFromASTFile(file, RawPCHContainerReader(),
-		ASTUnit::LoadEverything, linked->diags, fs_opts, hs_opts);
+		ASTUnit::LoadEverything, unit_diagnostics(linked), fs_opts,
+		hs_opts);
 }
 
 #endif
@@ -243,7 +277,12 @@ private:
 		auto res = ASTImporter::ImportImpl(From);
 		if (res)
 			return res;
-		if (!refused_over_name(res.takeError()))
+
+		ASTImportError::ErrorKind why = refusal(res.takeError());
+
+		if (why == ASTImportError::UnsupportedConstruct)
+			return import_unsupported(From);
+		if (why != ASTImportError::NameConflict)
 			return llvm::make_error<ASTImportError>(
 					ASTImportError::Unknown);
 
@@ -265,21 +304,57 @@ private:
 		return MapImported(From, found);
 	}
 
-private:
-	/* Was "err" the importer saying it found the name already and
-	 * would not have the two be one?  The error is consumed either
-	 * way, since it is answered here rather than passed on.
+	/* Import a declaration the importer has no case for.
+	 *
+	 * Assembly written at the outermost level of a file is one such:
+	 * clang reads it, holds it in the AST and generates it, and the
+	 * importer alone does not know what to do with it, which is a gap
+	 * in the importer rather than a thing that cannot be carried
+	 * over.  Every unit that includes <iostream> has one, so without
+	 * this the standard library cannot be linked whole.
 	 */
-	static bool refused_over_name(llvm::Error err) {
-		bool over_name = false;
+	Expected<Decl *> import_unsupported(Decl *From) {
+		auto *asm_decl = dyn_cast<FileScopeAsmDecl>(From);
+
+		if (!asm_decl)
+			return llvm::make_error<ASTImportError>(
+					ASTImportError::UnsupportedConstruct);
+
+		auto str = Import(asm_decl->getAsmStringExpr());
+		if (!str)
+			return str.takeError();
+		auto asm_loc = Import(asm_decl->getAsmLoc());
+		if (!asm_loc)
+			return asm_loc.takeError();
+		auto rparen_loc = Import(asm_decl->getRParenLoc());
+		if (!rparen_loc)
+			return rparen_loc.takeError();
+
+		FileScopeAsmDecl *to = FileScopeAsmDecl::Create(getToContext(),
+				getToContext().getTranslationUnitDecl(),
+				*str, *asm_loc, *rparen_loc);
+
+		MapImported(From, to);
+		to->getDeclContext()->addDeclInternal(to);
+
+		return to;
+	}
+
+private:
+	/* Why the importer would not take a declaration.  The error is
+	 * consumed either way, since it is answered here rather than
+	 * passed on.
+	 */
+	static ASTImportError::ErrorKind refusal(llvm::Error err) {
+		ASTImportError::ErrorKind kind = ASTImportError::Unknown;
 
 		llvm::handleAllErrors(std::move(err),
 			[&](const ASTImportError &e) {
-				over_name = e.Error == ASTImportError::NameConflict;
+				kind = e.Error;
 			},
 			[](const llvm::ErrorInfoBase &) {});
 
-		return over_name;
+		return kind;
 	}
 
 	/* The specialisation of the target that is the same type as

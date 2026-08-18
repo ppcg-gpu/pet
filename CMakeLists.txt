@@ -328,6 +328,20 @@ add_test(NAME PET_CompileCommands
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunCompileCommandsTest.cmake
 )
 
+# Assembly written at the outermost level of a file.  clang reads it,
+# holds it and generates it; the importer has no case for it at all.
+add_test(NAME PET_AstLink_asm
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DLINKER=$<TARGET_FILE:pet_ast_link>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/asm
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/asm
+        -DSUFFIX=.cpp
+        "-DUNITS=uses_asm_out|uses_asm_in"
+        -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/asm/expected.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
+)
+
 # The link turned into a program and run against the same program built
 # the ordinary way.  Counting what was resolved cannot see a link that
 # holds two definitions of one name; building it can.
