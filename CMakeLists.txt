@@ -146,6 +146,11 @@ target_link_libraries(pet_scop_cmp PRIVATE ${LIBYAML_LIBRARIES})
 add_pet_program(pet_emit_ast pet_emit_ast.c)
 add_pet_program(pet_ast_link pet_ast_link.cc)
 # emit.c holds the yaml writer, which is not part of the library.
+# The only program here whose own source is C++ against clang, so it
+# needs what clang_feature_tests carries rather than only what pet
+# re-exports.
+add_pet_program(pet_linked_ir pet_linked_ir.cc)
+target_link_libraries(pet_linked_ir PRIVATE clang_feature_tests)
 add_pet_program(pet_linked_scop pet_linked_scop.c emit.c)
 target_include_directories(pet_linked_scop PRIVATE ${LIBYAML_INCLUDE_DIRS})
 target_link_libraries(pet_linked_scop PRIVATE ${LIBYAML_LIBRARIES})
