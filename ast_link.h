@@ -51,8 +51,24 @@ const char *pet_linked_ast_refused_why(struct pet_linked_ast *linked, int i);
 #if defined(__cplusplus)
 }
 
+#include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/Lex/Preprocessor.h>
+
+/* Finish the linked unit the way a compilation finishes one: instantiate
+ * the templates it uses, define the virtual tables it needs, and do the
+ * same again for whatever that asks for in turn.
+ *
+ * A link leaves all of it undone, because none of what it holds was read
+ * by a parser that reached the end of a file, and that end is where a
+ * compilation does it.  What the finishing produces is told to
+ * "consumer" and to nothing else, so a caller that generates code from
+ * the linked unit passes its code generator: told instead to a consumer
+ * that ignores it, an instantiated body sits in the context and nothing
+ * is ever generated from it.
+ */
+void pet_linked_ast_finish(struct pet_linked_ast *linked,
+	clang::ASTConsumer &consumer);
 
 /* The context holding the linked AST.
  */

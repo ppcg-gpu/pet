@@ -1,0 +1,1039 @@
+--- a/clang/lib/AST/ASTImporter.cpp
++++ b/clang/lib/AST/ASTImporter.cpp
+@@ -104,6 +104,25 @@
+ 
+   char ASTImportError::ID;
+ 
++  // Which of the fifteen places that refuse on a name actually refused.
++  // The error is recorded against whatever declaration was being imported
++  // when it surfaced, which is not where it came from, so the site has to
++  // say so itself.  Env-gated: AST_LINK_TRACE_CONFLICT=1.
++  static llvm::Error nameConflictAt(unsigned Line) {
++    if (getenv("AST_LINK_TRACE_CONFLICT"))
++      llvm::errs() << "name-conflict-at ASTImporter.cpp:" << Line << "\n";
++    return llvm::make_error<ASTImportError>(ASTImportError::NameConflict);
++  }
++
++  // The same, naming the declaration the site refused on.
++  static llvm::Error nameConflictAt(unsigned Line, const NamedDecl *D) {
++    if (getenv("AST_LINK_TRACE_CONFLICT"))
++      llvm::errs() << "name-conflict-at ASTImporter.cpp:" << Line << " "
++                   << D->getDeclKindName() << " "
++                   << D->getQualifiedNameAsString() << "\n";
++    return llvm::make_error<ASTImportError>(ASTImportError::NameConflict);
++  }
++
+   template <class T>
+   static SmallVector<Decl *, 2>
+   getCanonicalForwardRedeclChain(Redeclarable<T> *D) {
+@@ -321,6 +340,21 @@
+       DeclContext *ToLexicalDC = ToD->getLexicalDeclContext();
+ 
+       bool Visible = false;
++      // A record names each of its members once.  Two units that both
++      // declare a member give two declarations of the one member, and
++      // putting the second in the record as well leaves a record that
++      // says the same member twice -- which the table of virtual
++      // methods and the layout both read as two members.
++      auto alreadyNamed = [](DeclContext *DC, Decl *D) {
++        if (!isa<RecordDecl>(DC))
++          return false;
++        for (Decl *Other : DC->decls())
++          if (Other != D && Other->getCanonicalDecl() == D->getCanonicalDecl())
++            return true;
++        return false;
++      };
++      if (alreadyNamed(ToDC, ToD) || alreadyNamed(ToLexicalDC, ToD))
++        return;
+       if (FromDC->containsDeclAndLoad(FromD)) {
+         ToDC->addDeclInternal(ToD);
+         Visible = true;
+@@ -516,6 +550,7 @@
+     ExpectedDecl VisitEmptyDecl(EmptyDecl *D);
+     ExpectedDecl VisitAccessSpecDecl(AccessSpecDecl *D);
+     ExpectedDecl VisitStaticAssertDecl(StaticAssertDecl *D);
++    ExpectedDecl VisitCapturedDecl(CapturedDecl *D);
+     ExpectedDecl VisitTranslationUnitDecl(TranslationUnitDecl *D);
+     ExpectedDecl VisitBindingDecl(BindingDecl *D);
+     ExpectedDecl VisitNamespaceDecl(NamespaceDecl *D);
+@@ -604,7 +639,14 @@
+     // FIXME: SEHFinallyStmt
+     // FIXME: SEHTryStmt
+     // FIXME: SEHLeaveStmt
+-    // FIXME: CapturedStmt
++    ExpectedStmt VisitCapturedStmt(CapturedStmt *S);
++    ExpectedStmt VisitOMPBarrierDirective(OMPBarrierDirective *S);
++    ExpectedStmt VisitOMPSingleDirective(OMPSingleDirective *S);
++    ExpectedStmt VisitOMPParallelDirective(OMPParallelDirective *S);
++    ExpectedStmt VisitOMPForDirective(OMPForDirective *S);
++    Expected<OMPClause *> ImportOMPClause(OMPClause *C);
++    Error ImportOMPClauses(OMPExecutableDirective *From,
++                           SmallVectorImpl<OMPClause *> &To);
+     ExpectedStmt VisitCXXCatchStmt(CXXCatchStmt *S);
+     ExpectedStmt VisitCXXTryStmt(CXXTryStmt *S);
+     ExpectedStmt VisitCXXForRangeStmt(CXXForRangeStmt *S);
+@@ -1312,6 +1354,8 @@
+ }
+ 
+ ExpectedType ASTNodeImporter::VisitType(const Type *T) {
++  if (getenv("AST_LINK_TRACE_UNSUPPORTED"))
++    llvm::errs() << "unsupported Type " << T->getTypeClassName() << "\n";
+   Importer.FromDiag(SourceLocation(), diag::err_unsupported_ast_node)
+     << T->getTypeClassName();
+   return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
+@@ -2379,6 +2423,14 @@
+ 
+   if (const auto *FromRD = dyn_cast<RecordDecl>(FromDC)) {
+     DeclContext *ToDC = *ToDCOrErr;
++
++    // The members are those of the definition, so they are put in order
++    // in the definition.  A record is in a translation unit both as a
++    // mention and as a definition, and a member imported into the one
++    // cannot be reordered in the other.
++    if (auto *ToTag = dyn_cast<TagDecl>(ToDC))
++      if (TagDecl *ToDef = ToTag->getDefinition())
++        ToDC = ToDef;
+     // Remove all declarations, which may be in wrong order in the
+     // lexical DeclContext and then add them in the proper order.
+     for (auto *D : FromRD->decls()) {
+@@ -2386,7 +2438,32 @@
+         continue;
+ 
+       assert(D && "DC contains a null decl");
++
++      // A friend is not in the record's list of declarations at all: a
++      // record holds its friends in a list of their own, and putting one
++      // in order among the members is asking after something that was
++      // never there.
++      if (isa<FriendDecl>(D))
++        continue;
+       if (Decl *ToD = Importer.GetAlreadyImportedOrNull(D)) {
++        // A member imported before the record was known to have a
++        // definition is in the mention; it belongs in the definition,
++        // which is where the layout is built from and where everything
++        // looks for it.  It is moved rather than left behind: leaving it
++        // is a record whose members are partly in one link and partly in
++        // another.
++        if (auto *ToND = dyn_cast<NamedDecl>(ToD)) {
++          DeclContext *Was = ToND->getLexicalDeclContext();
++
++          if (Was != ToDC && isa<TagDecl>(Was) &&
++              cast<TagDecl>(Was)->getDefinition() == ToDC) {
++            Was->removeDecl(ToD);
++            ToD->setLexicalDeclContext(ToDC);
++            ToD->setDeclContext(ToDC);
++            ToDC->addDeclInternal(ToD);
++          }
++        }
++
+         // Remove only the decls which we successfully imported.
+         assert(ToDC == ToD->getLexicalDeclContext() && ToDC->containsDecl(ToD));
+         // Remove the decl from its wrong place in the linked list.
+@@ -2491,6 +2568,16 @@
+   return Error::success();
+ }
+ 
++// How an imported declaration is reached.  A member of a C struct says
++// nothing about that, because C has nothing to say; a C++ record insists
++// that every one of its members say something, and what a C struct means
++// is public.
++static AccessSpecifier importedAccess(const Decl *D) {
++  if (D->getAccess() == AS_none && isa<RecordDecl>(D->getLexicalDeclContext()))
++    return AS_public;
++  return D->getAccess();
++}
++
+ Error ASTNodeImporter::ImportDefinition(
+     RecordDecl *From, RecordDecl *To, ImportDefinitionKind Kind) {
+   auto DefinitionCompleter = [To]() {
+@@ -2612,6 +2699,24 @@
+       return Err;
+   }
+ 
++  // What the record is, is what the record it was copied from is.
++  // Setting the bases and adding the members makes clang work all of
++  // that out again from pieces that arrive one at a time, and a base
++  // whose own definition has not arrived yet is not yet known to be
++  // empty.  Three empty bases then take a byte each instead of none,
++  // the members after them move by eight, and every body that reaches
++  // into the record reaches into the wrong place.
++  if (ToCXX && FromCXX && ToCXX->dataPtr() && FromCXX->dataPtr()) {
++    struct CXXRecordDecl::DefinitionData &ToData = ToCXX->data();
++    struct CXXRecordDecl::DefinitionData &FromData = FromCXX->data();
++
++    #define FIELD(Name, Width, Merge) \
++    ToData.Name = FromData.Name;
++    #include "clang/AST/CXXRecordDeclDefinitionBits.def"
++
++    ToCXX->setArgPassingRestrictions(FromCXX->getArgPassingRestrictions());
++  }
++
+   return Error::success();
+ }
+ 
+@@ -2729,6 +2834,8 @@
+ }
+ 
+ ExpectedDecl ASTNodeImporter::VisitDecl(Decl *D) {
++  if (getenv("AST_LINK_TRACE_UNSUPPORTED"))
++    llvm::errs() << "unsupported Decl " << D->getDeclKindName() << "\n";
+   Importer.FromDiag(D->getLocation(), diag::err_unsupported_ast_node)
+     << D->getDeclKindName();
+   return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
+@@ -3077,7 +3184,7 @@
+   // Add to the lookupTable because we could not do that in MapImported.
+   Importer.AddToLookupTable(ToTypedef);
+ 
+-  ToTypedef->setAccess(D->getAccess());
++  ToTypedef->setAccess(importedAccess(D));
+ 
+   // Templated declarations should not appear in DeclContext.
+   TypeAliasDecl *FromAlias = IsAlias ? cast<TypeAliasDecl>(D) : nullptr;
+@@ -3147,7 +3254,7 @@
+ 
+   ToTemplatedDecl->setDescribedAliasTemplate(ToAlias);
+ 
+-  ToAlias->setAccess(D->getAccess());
++  ToAlias->setAccess(importedAccess(D));
+   ToAlias->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToAlias);
+   if (DC != Importer.getToContext().getTranslationUnitDecl())
+@@ -3280,7 +3387,7 @@
+   D2->setQualifierInfo(ToQualifierLoc);
+   D2->setIntegerType(ToIntegerType);
+   D2->setBraceRange(ToBraceRange);
+-  D2->setAccess(D->getAccess());
++  D2->setAccess(importedAccess(D));
+   D2->setLexicalDeclContext(LexicalDC);
+   addDeclToContexts(D, D2);
+ 
+@@ -3447,7 +3554,7 @@
+     }
+ 
+     D2 = D2CXX;
+-    D2->setAccess(D->getAccess());
++    D2->setAccess(importedAccess(D));
+     D2->setLexicalDeclContext(LexicalDC);
+     addDeclToContexts(D, D2);
+ 
+@@ -3476,6 +3583,20 @@
+           return POIOrErr.takeError();
+     }
+ 
++  } else if (Importer.getToContext().getLangOpts().CPlusPlus) {
++    // A record in a C++ context is a C++ record, whatever it was in the
++    // unit it came from.  Everything that reads a record back -- the
++    // layout, the code generator, TagDecl::startDefinition walking the
++    // chain -- takes the language of the context for the kind of the
++    // record, so a plain record here is one nobody can read.
++    if (GetImportedOrCreateDecl(D2CXX, D, Importer.getToContext(),
++                                D->getTagKind(), DC, *BeginLocOrErr, Loc,
++                                Name.getAsIdentifierInfo(),
++                                cast_or_null<CXXRecordDecl>(PrevDecl)))
++      return D2CXX;
++    D2 = D2CXX;
++    D2->setLexicalDeclContext(LexicalDC);
++    addDeclToContexts(D, D2);
+   } else {
+     if (GetImportedOrCreateDecl(D2, D, Importer.getToContext(),
+                                 D->getTagKind(), DC, *BeginLocOrErr, Loc,
+@@ -3556,7 +3677,7 @@
+           Name.getAsIdentifierInfo(), *TypeOrErr, *InitOrErr, D->getInitVal()))
+     return ToEnumerator;
+ 
+-  ToEnumerator->setAccess(D->getAccess());
++  ToEnumerator->setAccess(importedAccess(D));
+   ToEnumerator->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToEnumerator);
+   return ToEnumerator;
+@@ -4108,6 +4229,46 @@
+ 
+   // Create the imported function.
+   FunctionDecl *ToFunction = nullptr;
++  if (isa<CXXMethodDecl>(D) && !isa<CXXRecordDecl>(DC)) {
++    auto *FromDC = cast<Decl>(D->getDeclContext());
++    auto *ToDCD = cast<Decl>(DC);
++    auto *FromND = dyn_cast<NamedDecl>(FromDC);
++    auto *ToND = dyn_cast<NamedDecl>(ToDCD);
++    const char *What = isa<CXXConstructorDecl>(D)  ? "constructor"
++                       : isa<CXXDestructorDecl>(D) ? "destructor"
++                       : isa<CXXConversionDecl>(D) ? "conversion"
++                                                   : "method";
++    auto *FromRD = dyn_cast<RecordDecl>(FromDC);
++    auto *ToRD = dyn_cast<RecordDecl>(ToDCD);
++    llvm::errs() << "a " << What << " " << D->getQualifiedNameAsString()
++                 << " is going into a " << ToDCD->getDeclKindName()
++                 << " called " << (ToND ? ToND->getNameAsString() : "<none>")
++                 << " (definition: "
++                 << (ToRD ? (ToRD->getDefinition() == ToRD ? "itself"
++                             : ToRD->getDefinition() ? "elsewhere"
++                                                     : "none")
++                          : "n/a")
++                 << ", chain of "
++                 << (ToRD ? std::distance(ToRD->redecls_begin(),
++                                          ToRD->redecls_end())
++                          : 0)
++                 << "); the source context is a " << FromDC->getDeclKindName()
++                 << " called "
++                 << (FromND ? FromND->getNameAsString() : "<none>")
++                 << " (definition: "
++                 << (FromRD ? (FromRD->getDefinition() == FromRD ? "itself"
++                               : FromRD->getDefinition() ? "elsewhere"
++                                                         : "none")
++                            : "n/a")
++                 << "); already imported before this call: "
++                 << (Importer.GetAlreadyImportedOrNull(FromDC)
++                         ? cast<Decl>(Importer.GetAlreadyImportedOrNull(FromDC))
++                               ->getDeclKindName()
++                         : "<null>")
++                 << "\n";
++    llvm::errs().flush();
++    return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
++  }
+   if (auto *FromConstructor = dyn_cast<CXXConstructorDecl>(D)) {
+     ExplicitSpecifier ESpec =
+         importExplicitSpecifier(Err, FromConstructor->getExplicitSpecifier());
+@@ -4210,7 +4371,7 @@
+   }
+ 
+   ToFunction->setQualifierInfo(ToQualifierLoc);
+-  ToFunction->setAccess(D->getAccess());
++  ToFunction->setAccess(importedAccess(D));
+   ToFunction->setLexicalDeclContext(LexicalDC);
+   ToFunction->setVirtualAsWritten(D->isVirtualAsWritten());
+   ToFunction->setTrivial(D->isTrivial());
+@@ -4348,6 +4509,34 @@
+   if (ToD)
+     return ToD;
+ 
++  // The member goes into the definition of its record, and not into a
++  // mention of it.
++  //
++  // A record is in a translation unit both as a mention and as a
++  // definition, and which of the two the context resolves to is decided
++  // by whichever was imported first.  A member put into a mention is a
++  // member of a record that holds nothing and that no layout is built
++  // from, so everything that reads it afterwards reads it from a record
++  // that has not got it.  Unlike a declaration, a member is not a link of
++  // any chain, so pointing it at the definition disturbs nothing.
++  if (auto *DCTag = dyn_cast<TagDecl>(DC))
++    if (TagDecl *DCDef = DCTag->getDefinition())
++      if (DCDef != DCTag) {
++        DC = DCDef;
++        if (LexicalDC == DCTag)
++          LexicalDC = DCDef;
++      }
++
++  if (getenv("PET_FIELD_TRACE") && D->getNameAsString() == "_M_current")
++    if (auto *R = llvm::dyn_cast<RecordDecl>(DC)) {
++      llvm::errs() << "_M_current is going into record " << (const void *)R
++                   << ", which is "
++                   << (R->isCompleteDefinition() ? "a definition" : "a mention")
++                   << ", and its chain's definition is "
++                   << (const void *)R->getDefinition() << "\n";
++      llvm::errs().flush();
++    }
++
+   // Determine whether we've already imported this field.
+   auto FoundDecls = Importer.findDeclsInToCtx(DC, Name);
+   for (auto *FoundDecl : FoundDecls) {
+@@ -4389,7 +4578,7 @@
+       Importer.ToDiag(FoundField->getLocation(), diag::note_odr_value_here)
+         << FoundField->getType();
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__, D);
+     }
+   }
+ 
+@@ -4412,7 +4601,7 @@
+                               D->getInClassInitStyle()))
+     return ToField;
+ 
+-  ToField->setAccess(D->getAccess());
++  ToField->setAccess(importedAccess(D));
+   ToField->setLexicalDeclContext(LexicalDC);
+   ToField->setImplicit(D->isImplicit());
+   if (ToCapturedVLAType)
+@@ -4473,7 +4662,7 @@
+       Importer.ToDiag(FoundField->getLocation(), diag::note_odr_value_here)
+         << FoundField->getType();
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+   }
+ 
+@@ -4499,7 +4688,7 @@
+     // FIXME here we leak `NamedChain` which is allocated before
+     return ToIndirectField;
+ 
+-  ToIndirectField->setAccess(D->getAccess());
++  ToIndirectField->setAccess(importedAccess(D));
+   ToIndirectField->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToIndirectField);
+   return ToIndirectField;
+@@ -4620,7 +4809,7 @@
+                               *EllipsisLocOrErr, ToTPLists))
+     return FrD;
+ 
+-  FrD->setAccess(D->getAccess());
++  FrD->setAccess(importedAccess(D));
+   FrD->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(FrD);
+   return FrD;
+@@ -4652,7 +4841,7 @@
+       Importer.ToDiag(FoundIvar->getLocation(), diag::note_odr_value_here)
+         << FoundIvar->getType();
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+   }
+ 
+@@ -4807,7 +4996,7 @@
+ 
+   ToVar->setTSCSpec(D->getTSCSpec());
+   ToVar->setQualifierInfo(ToQualifierLoc);
+-  ToVar->setAccess(D->getAccess());
++  ToVar->setAccess(importedAccess(D));
+   ToVar->setLexicalDeclContext(LexicalDC);
+   if (D->isInlineSpecified())
+     ToVar->setInlineSpecified();
+@@ -4981,7 +5170,7 @@
+                         diag::note_odr_objc_method_here)
+           << D->isInstanceMethod() << Name;
+ 
+-        return make_error<ASTImportError>(ASTImportError::NameConflict);
++        return nameConflictAt(__LINE__);
+       }
+ 
+       // Check the number of parameters.
+@@ -4993,7 +5182,7 @@
+                         diag::note_odr_objc_method_here)
+           << D->isInstanceMethod() << Name;
+ 
+-        return make_error<ASTImportError>(ASTImportError::NameConflict);
++        return nameConflictAt(__LINE__);
+       }
+ 
+       // Check parameter types.
+@@ -5009,7 +5198,7 @@
+           Importer.ToDiag((*FoundP)->getLocation(), diag::note_odr_value_here)
+             << (*FoundP)->getType();
+ 
+-          return make_error<ASTImportError>(ASTImportError::NameConflict);
++          return nameConflictAt(__LINE__);
+         }
+       }
+ 
+@@ -5022,7 +5211,7 @@
+                         diag::note_odr_objc_method_here)
+           << D->isInstanceMethod() << Name;
+ 
+-        return make_error<ASTImportError>(ASTImportError::NameConflict);
++        return nameConflictAt(__LINE__);
+       }
+ 
+       // FIXME: Any other bits we need to merge?
+@@ -5485,7 +5674,7 @@
+   }
+ 
+   ToShadow->setLexicalDeclContext(LexicalDC);
+-  ToShadow->setAccess(D->getAccess());
++  ToShadow->setAccess(importedAccess(D));
+ 
+   if (UsingShadowDecl *FromPattern =
+       Importer.getFromContext().getInstantiatedFromUsingShadowDecl(D)) {
+@@ -5600,7 +5789,7 @@
+                               ToEllipsisLoc))
+     return ToUsingValue;
+ 
+-  ToUsingValue->setAccess(D->getAccess());
++  ToUsingValue->setAccess(importedAccess(D));
+   ToUsingValue->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToUsingValue);
+ 
+@@ -5632,7 +5821,7 @@
+                               ToQualifierLoc, Loc, Name, ToEllipsisLoc))
+     return ToUsing;
+ 
+-  ToUsing->setAccess(D->getAccess());
++  ToUsing->setAccess(importedAccess(D));
+   ToUsing->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToUsing);
+ 
+@@ -5954,7 +6143,7 @@
+         Importer.FromDiag(D->getLocation(),
+                           diag::note_odr_objc_missing_superclass);
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+   }
+ 
+@@ -5993,7 +6182,7 @@
+         Importer.ToDiag(FoundProp->getLocation(), diag::note_odr_value_here)
+           << FoundProp->getType();
+ 
+-        return make_error<ASTImportError>(ASTImportError::NameConflict);
++        return nameConflictAt(__LINE__);
+       }
+ 
+       // FIXME: Check property attributes, getters, setters, etc.?
+@@ -6098,7 +6287,7 @@
+         << D->getPropertyDecl()->getDeclName()
+         << (D->getPropertyImplementation() == ObjCPropertyImplDecl::Dynamic);
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+ 
+     // For @synthesize, check that we have the same
+@@ -6113,7 +6302,7 @@
+                         diag::note_odr_objc_synthesize_ivar_here)
+         << D->getPropertyIvarDecl()->getDeclName();
+ 
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+ 
+     // Merge the existing implementation with the new implementation.
+@@ -6352,7 +6541,7 @@
+ 
+   ToTemplated->setDescribedClassTemplate(D2);
+ 
+-  D2->setAccess(D->getAccess());
++  D2->setAccess(importedAccess(D));
+   D2->setLexicalDeclContext(LexicalDC);
+ 
+   addDeclToContexts(D, D2);
+@@ -6452,7 +6641,7 @@
+       }
+     } else { // ODR violation.
+       // FIXME HandleNameConflict
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__, D);
+     }
+   }
+ 
+@@ -6671,7 +6860,7 @@
+ 
+   ToTemplated->setDescribedVarTemplate(ToVarTD);
+ 
+-  ToVarTD->setAccess(D->getAccess());
++  ToVarTD->setAccess(importedAccess(D));
+   ToVarTD->setLexicalDeclContext(LexicalDC);
+   LexicalDC->addDeclInternal(ToVarTD);
+   if (DC != Importer.getToContext().getTranslationUnitDecl())
+@@ -6757,7 +6946,7 @@
+           return Importer.MapImported(D, FoundDef);
+       }
+     } else {
+-      return make_error<ASTImportError>(ASTImportError::NameConflict);
++      return nameConflictAt(__LINE__);
+     }
+   }
+ 
+@@ -6840,7 +7029,7 @@
+   if (D->isConstexpr())
+     D2->setConstexpr(true);
+ 
+-  D2->setAccess(D->getAccess());
++  D2->setAccess(importedAccess(D));
+ 
+   if (Error Err = ImportInitializer(D, D2))
+     return std::move(Err);
+@@ -6941,11 +7130,11 @@
+   // If not, there is AST incompatibility that can be caused by previous import
+   // errors. (NameConflict is not exact here.)
+   if (TemplatedFD->getDescribedTemplate())
+-    return make_error<ASTImportError>(ASTImportError::NameConflict);
++    return nameConflictAt(__LINE__);
+ 
+   TemplatedFD->setDescribedFunctionTemplate(ToFunc);
+ 
+-  ToFunc->setAccess(D->getAccess());
++  ToFunc->setAccess(importedAccess(D));
+   ToFunc->setLexicalDeclContext(LexicalDC);
+   addDeclToContexts(D, ToFunc);
+ 
+@@ -7033,6 +7222,8 @@
+ //----------------------------------------------------------------------------
+ 
+ ExpectedStmt ASTNodeImporter::VisitStmt(Stmt *S) {
++  if (getenv("AST_LINK_TRACE_UNSUPPORTED"))
++    llvm::errs() << "unsupported Stmt " << S->getStmtClassName() << "\n";
+   Importer.FromDiag(S->getBeginLoc(), diag::err_unsupported_ast_node)
+       << S->getStmtClassName();
+   return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
+@@ -7391,6 +7582,361 @@
+                             ToNRVOCandidate);
+ }
+ 
++// The body of an OpenMP region is held in a CapturedDecl, which is a
++// function in all but name: it has parameters, a body, and a context of
++// its own.
++ExpectedDecl ASTNodeImporter::VisitCapturedDecl(CapturedDecl *D) {
++  DeclContext *DC, *LexicalDC;
++  if (Error Err = ImportDeclContext(D, DC, LexicalDC)) {
++    llvm::errs() << "a captured region refuses at its context\n";
++    llvm::errs().flush();
++    return std::move(Err);
++  }
++
++  CapturedDecl *ToCD;
++  if (GetImportedOrCreateDecl(ToCD, D, Importer.getToContext(), DC,
++                              D->getNumParams()))
++    return ToCD;
++
++  ToCD->setLexicalDeclContext(LexicalDC);
++  LexicalDC->addDeclInternal(ToCD);
++
++  for (unsigned I = 0; I != D->getNumParams(); ++I) {
++    Expected<ImplicitParamDecl *> ToParamOrErr = import(D->getParam(I));
++    if (!ToParamOrErr) {
++      llvm::errs() << "a captured region refuses at parameter " << I << "\n";
++      llvm::errs().flush();
++      return ToParamOrErr.takeError();
++    }
++    if (I == D->getContextParamPosition())
++      ToCD->setContextParam(I, *ToParamOrErr);
++    else
++      ToCD->setParam(I, *ToParamOrErr);
++  }
++
++  ToCD->setNothrow(D->isNothrow());
++
++  ExpectedStmt ToBodyOrErr = import(D->getBody());
++  if (!ToBodyOrErr) {
++    ASTImportError::ErrorKind K = ASTImportError::Unknown;
++    handleAllErrors(ToBodyOrErr.takeError(),
++                    [&](const ASTImportError &IE) { K = IE.Error; });
++    llvm::errs() << "a captured region refuses at its body, a "
++                 << D->getBody()->getStmtClassName() << ", of kind "
++                 << (int)K << "\n";
++    llvm::errs().flush();
++    return make_error<ASTImportError>(K);
++  }
++  ToCD->setBody(*ToBodyOrErr);
++
++  return ToCD;
++}
++
++ExpectedStmt ASTNodeImporter::VisitCapturedStmt(CapturedStmt *S) {
++  Error Err = Error::success();
++  auto *ToCD = importChecked(Err, S->getCapturedDecl());
++  auto *ToRD = importChecked(Err, const_cast<RecordDecl *>(
++                                      S->getCapturedRecordDecl()));
++  auto *ToInner = importChecked(Err, S->getCapturedStmt());
++  if (Err)
++    return std::move(Err);
++
++  SmallVector<CapturedStmt::Capture, 4> ToCaptures;
++  for (const CapturedStmt::Capture &From : S->captures()) {
++    ExpectedSLoc ToLocOrErr = import(From.getLocation());
++    if (!ToLocOrErr)
++      return ToLocOrErr.takeError();
++    VarDecl *ToVar = nullptr;
++    if (From.capturesVariable() || From.capturesVariableByCopy() ||
++        From.capturesVariableArrayType()) {
++      Expected<VarDecl *> ToVarOrErr = import(From.getCapturedVar());
++      if (!ToVarOrErr)
++        return ToVarOrErr.takeError();
++      ToVar = *ToVarOrErr;
++    }
++    ToCaptures.push_back(
++        CapturedStmt::Capture(*ToLocOrErr, From.getCaptureKind(), ToVar));
++  }
++
++  SmallVector<Expr *, 4> ToInits;
++  for (Expr *FromInit : S->capture_inits()) {
++    if (!FromInit) {
++      ToInits.push_back(nullptr);
++      continue;
++    }
++    ExpectedExpr ToInitOrErr = import(FromInit);
++    if (!ToInitOrErr)
++      return ToInitOrErr.takeError();
++    ToInits.push_back(*ToInitOrErr);
++  }
++
++  return CapturedStmt::Create(Importer.getToContext(), ToInner,
++                              S->getCapturedRegionKind(), ToCaptures, ToInits,
++                              ToCD, ToRD);
++}
++
++// The clauses of an OpenMP directive.  Only the ones that are met are
++// carried: a clause carried wrongly is worse than a clause refused,
++// because the refusal is said out loud and the wrong carry is not.
++Expected<OMPClause *> ASTNodeImporter::ImportOMPClause(OMPClause *C) {
++  Error Err = Error::success();
++
++  if (auto *From = dyn_cast<OMPNumThreadsClause>(C)) {
++    auto *ToNum = importChecked(Err, From->getNumThreads());
++    auto *ToHelper = importChecked(Err, From->getPreInitStmt());
++    auto ToStart = importChecked(Err, From->getBeginLoc());
++    auto ToLParen = importChecked(Err, From->getLParenLoc());
++    auto ToModifier = importChecked(Err, From->getModifierLoc());
++    auto ToEnd = importChecked(Err, From->getEndLoc());
++    if (Err)
++      return std::move(Err);
++    return new (Importer.getToContext()) OMPNumThreadsClause(
++        From->getModifier(), ToNum, ToHelper, From->getCaptureRegion(),
++        ToStart, ToLParen, ToModifier, ToEnd);
++  }
++
++  if (auto *From = dyn_cast<OMPReductionClause>(C)) {
++    auto ToStart = importChecked(Err, From->getBeginLoc());
++    auto ToLParen = importChecked(Err, From->getLParenLoc());
++    auto ToModifierLoc = importChecked(Err, From->getModifierLoc());
++    auto ToColon = importChecked(Err, From->getColonLoc());
++    auto ToEnd = importChecked(Err, From->getEndLoc());
++    auto ToQualifier = importChecked(Err, From->getQualifierLoc());
++    auto *ToPreInit = importChecked(Err, From->getPreInitStmt());
++    auto *ToPostUpdate = importChecked(Err, From->getPostUpdateExpr());
++    if (Err)
++      return std::move(Err);
++
++    auto ToNameLoc = importChecked(Err, From->getNameInfo().getLoc());
++    auto ToName = importChecked(Err, From->getNameInfo().getName());
++    if (Err)
++      return std::move(Err);
++
++    DeclarationNameInfo ToNameInfo(ToName, ToNameLoc);
++    if (Error E = ImportDeclarationNameLoc(From->getNameInfo(), ToNameInfo))
++      return std::move(E);
++
++    auto carry = [&](ArrayRef<Expr *> Exprs,
++                     SmallVectorImpl<Expr *> &Out) -> Error {
++      for (Expr *E : Exprs) {
++        if (!E) {
++          Out.push_back(nullptr);
++          continue;
++        }
++        ExpectedExpr ToEOrErr = import(E);
++        if (!ToEOrErr)
++          return ToEOrErr.takeError();
++        Out.push_back(*ToEOrErr);
++      }
++      return Error::success();
++    };
++
++    SmallVector<Expr *, 4> Vars, Privates, LHS, RHS, Ops, CopyOps;
++    SmallVector<Expr *, 4> CopyTemps, CopyElems;
++    if (Error E = carry(From->varlist(), Vars))
++      return std::move(E);
++    if (Error E = carry(From->privates(), Privates))
++      return std::move(E);
++    if (Error E = carry(From->lhs_exprs(), LHS))
++      return std::move(E);
++    if (Error E = carry(From->rhs_exprs(), RHS))
++      return std::move(E);
++    if (Error E = carry(From->reduction_ops(), Ops))
++      return std::move(E);
++    // The three lists below are only allocated for an inscan reduction;
++    // for any other kind the clause ends after the reduction operations,
++    // and asking for them reads past it.
++    if (From->getModifier() == OMPC_REDUCTION_inscan) {
++      if (Error E = carry(From->copy_ops(), CopyOps))
++        return std::move(E);
++      if (Error E = carry(From->copy_array_temps(), CopyTemps))
++        return std::move(E);
++      if (Error E = carry(From->copy_array_elems(), CopyElems))
++        return std::move(E);
++    }
++
++    SmallVector<bool, 4> Flags(From->private_var_reduction_flags().begin(),
++                               From->private_var_reduction_flags().end());
++
++    return OMPReductionClause::Create(
++        Importer.getToContext(), ToStart, ToLParen, ToModifierLoc, ToColon,
++        ToEnd, From->getModifier(), Vars, ToQualifier, ToNameInfo, Privates,
++        LHS, RHS, Ops, CopyOps, CopyTemps, CopyElems, ToPreInit, ToPostUpdate,
++        Flags, From->getOriginalSharingModifier());
++  }
++
++  if (auto *From = dyn_cast<OMPScheduleClause>(C)) {
++    auto ToStart = importChecked(Err, From->getBeginLoc());
++    auto ToLParen = importChecked(Err, From->getLParenLoc());
++    auto ToKindLoc = importChecked(Err, From->getScheduleKindLoc());
++    auto ToComma = importChecked(Err, From->getCommaLoc());
++    auto ToEnd = importChecked(Err, From->getEndLoc());
++    auto ToM1Loc = importChecked(Err, From->getFirstScheduleModifierLoc());
++    auto ToM2Loc = importChecked(Err, From->getSecondScheduleModifierLoc());
++    auto *ToChunk = importChecked(Err, From->getChunkSize());
++    auto *ToHelper = importChecked(Err, From->getPreInitStmt());
++    if (Err)
++      return std::move(Err);
++    return new (Importer.getToContext()) OMPScheduleClause(
++        ToStart, ToLParen, ToKindLoc, ToComma, ToEnd, From->getScheduleKind(),
++        ToChunk, ToHelper, From->getFirstScheduleModifier(), ToM1Loc,
++        From->getSecondScheduleModifier(), ToM2Loc);
++  }
++
++  llvm::errs() << "the clause " << getOpenMPClauseName(C->getClauseKind())
++               << " has no case in the importer\n";
++  llvm::errs().flush();
++  return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
++}
++
++Error ASTNodeImporter::ImportOMPClauses(OMPExecutableDirective *From,
++                                        SmallVectorImpl<OMPClause *> &To) {
++  for (OMPClause *C : From->clauses()) {
++    Expected<OMPClause *> ToCOrErr = ImportOMPClause(C);
++    if (!ToCOrErr)
++      return ToCOrErr.takeError();
++    To.push_back(*ToCOrErr);
++  }
++  return Error::success();
++}
++
++ExpectedStmt ASTNodeImporter::VisitOMPBarrierDirective(OMPBarrierDirective *S) {
++  Error Err = Error::success();
++  auto ToStart = importChecked(Err, S->getBeginLoc());
++  auto ToEnd = importChecked(Err, S->getEndLoc());
++  if (Err)
++    return std::move(Err);
++
++  return OMPBarrierDirective::Create(Importer.getToContext(), ToStart, ToEnd);
++}
++
++ExpectedStmt ASTNodeImporter::VisitOMPSingleDirective(OMPSingleDirective *S) {
++  Error Err = Error::success();
++  auto ToStart = importChecked(Err, S->getBeginLoc());
++  auto ToEnd = importChecked(Err, S->getEndLoc());
++  auto *ToAssociated = importChecked(Err, S->getAssociatedStmt());
++  if (Err)
++    return std::move(Err);
++
++  SmallVector<OMPClause *, 4> ToClauses;
++  if (Error E = ImportOMPClauses(S, ToClauses))
++    return std::move(E);
++
++  return OMPSingleDirective::Create(Importer.getToContext(), ToStart, ToEnd,
++                                    ToClauses, ToAssociated);
++}
++
++ExpectedStmt
++ASTNodeImporter::VisitOMPParallelDirective(OMPParallelDirective *S) {
++  Error Err = Error::success();
++  auto ToStart = importChecked(Err, S->getBeginLoc());
++  auto ToEnd = importChecked(Err, S->getEndLoc());
++  auto *ToAssociated = importChecked(Err, S->getAssociatedStmt());
++  auto *ToTaskRed = importChecked(Err, S->getTaskReductionRefExpr());
++  if (Err)
++    return std::move(Err);
++
++  SmallVector<OMPClause *, 4> ToClauses;
++  if (Error E = ImportOMPClauses(S, ToClauses))
++    return std::move(E);
++
++  return OMPParallelDirective::Create(Importer.getToContext(), ToStart, ToEnd,
++                                      ToClauses, ToAssociated, ToTaskRed,
++                                      S->hasCancel());
++}
++
++ExpectedStmt ASTNodeImporter::VisitOMPForDirective(OMPForDirective *S) {
++  Error Err = Error::success();
++  auto ToStart = importChecked(Err, S->getBeginLoc());
++  auto ToEnd = importChecked(Err, S->getEndLoc());
++  auto *ToAssociated = importChecked(Err, S->getAssociatedStmt());
++  auto *ToTaskRed = importChecked(Err, S->getTaskReductionRefExpr());
++  if (Err)
++    return std::move(Err);
++
++  SmallVector<OMPClause *, 4> ToClauses;
++  if (Error E = ImportOMPClauses(S, ToClauses))
++    return std::move(E);
++
++  // The expressions the loop was taken apart into.  A worksharing loop
++  // is generated from these and not from the loop as it was written, so
++  // a directive carried without them is a loop that generates nothing.
++  OMPLoopDirective::HelperExprs Exprs;
++  Exprs.clear(S->getLoopsNumber());
++
++  auto one = [&](Expr *From, Expr *&To) -> Error {
++    if (!From)
++      return Error::success();
++    ExpectedExpr ToOrErr = import(From);
++    if (!ToOrErr)
++      return ToOrErr.takeError();
++    To = *ToOrErr;
++    return Error::success();
++  };
++  auto many = [&](ArrayRef<Expr *> From,
++                  SmallVectorImpl<Expr *> &To) -> Error {
++    // clear() above sized these to the number of loops and filled them
++    // with nothing; what is carried replaces that rather than following
++    // it.
++    To.clear();
++    for (Expr *E : From) {
++      Expr *ToE = nullptr;
++      if (Error Er = one(E, ToE))
++        return Er;
++      To.push_back(ToE);
++    }
++    return Error::success();
++  };
++
++  struct { Expr *From; Expr **To; } singles[] = {
++    {S->getIterationVariable(), &Exprs.IterationVarRef},
++    {S->getLastIteration(), &Exprs.LastIteration},
++    {S->getNumIterations(), &Exprs.NumIterations},
++    {S->getPreCond(), &Exprs.PreCond},
++    {S->getCond(), &Exprs.Cond},
++    {S->getInit(), &Exprs.Init},
++    {S->getInc(), &Exprs.Inc},
++    {S->getIsLastIterVariable(), &Exprs.IL},
++    {S->getLowerBoundVariable(), &Exprs.LB},
++    {S->getUpperBoundVariable(), &Exprs.UB},
++    {S->getStrideVariable(), &Exprs.ST},
++    {S->getEnsureUpperBound(), &Exprs.EUB},
++    {S->getNextLowerBound(), &Exprs.NLB},
++    {S->getNextUpperBound(), &Exprs.NUB},
++  };
++  for (auto &P : singles)
++    if (Error E = one(P.From, *P.To))
++      return std::move(E);
++
++  if (Error E = many(S->counters(), Exprs.Counters))
++    return std::move(E);
++  if (Error E = many(S->private_counters(), Exprs.PrivateCounters))
++    return std::move(E);
++  if (Error E = many(S->inits(), Exprs.Inits))
++    return std::move(E);
++  if (Error E = many(S->updates(), Exprs.Updates))
++    return std::move(E);
++  if (Error E = many(S->finals(), Exprs.Finals))
++    return std::move(E);
++  if (Error E = many(S->dependent_counters(), Exprs.DependentCounters))
++    return std::move(E);
++  if (Error E = many(S->dependent_inits(), Exprs.DependentInits))
++    return std::move(E);
++  if (Error E = many(S->finals_conditions(), Exprs.FinalsConditions))
++    return std::move(E);
++
++  if (Stmt *FromPreInits = S->getPreInits()) {
++    ExpectedStmt ToPreInitsOrErr = import(FromPreInits);
++    if (!ToPreInitsOrErr)
++      return ToPreInitsOrErr.takeError();
++    Exprs.PreInits = *ToPreInitsOrErr;
++  }
++
++  return OMPForDirective::Create(Importer.getToContext(), ToStart, ToEnd,
++                                 S->getLoopsNumber(), ToClauses, ToAssociated,
++                                 Exprs, ToTaskRed, S->hasCancel());
++}
++
+ ExpectedStmt ASTNodeImporter::VisitCXXCatchStmt(CXXCatchStmt *S) {
+ 
+   Error Err = Error::success();
+@@ -7557,6 +8103,8 @@
+ // Import Expressions
+ //----------------------------------------------------------------------------
+ ExpectedStmt ASTNodeImporter::VisitExpr(Expr *E) {
++  if (getenv("AST_LINK_TRACE_UNSUPPORTED"))
++    llvm::errs() << "unsupported Expr " << E->getStmtClassName() << "\n";
+   Importer.FromDiag(E->getBeginLoc(), diag::err_unsupported_ast_node)
+       << E->getStmtClassName();
+   return make_error<ASTImportError>(ASTImportError::UnsupportedConstruct);
+@@ -8215,6 +8763,29 @@
+   if (!ToBasePathOrErr)
+     return ToBasePathOrErr.takeError();
+ 
++  if (E->getCastKind() == CK_LValueToRValue &&
++      (*ToTypeOrErr)->getAsCXXRecordDecl() &&
++      !E->getType()->getAsCXXRecordDecl()) {
++    llvm::errs() << "the cast came in over " << E->getType().getAsString()
++                 << " and goes out over " << (*ToTypeOrErr).getAsString()
++                 << "\n";
++    for (QualType T = E->getType(); ; ) {
++      QualType U = T.getSingleStepDesugaredType(Importer.getFromContext());
++      llvm::errs() << "    from: " << T.getAsString() << " ("
++                   << T->getTypeClassName() << ")\n";
++      if (U == T) break;
++      T = U;
++    }
++    for (QualType T = *ToTypeOrErr; ; ) {
++      QualType U = T.getSingleStepDesugaredType(Importer.getToContext());
++      llvm::errs() << "    to:   " << T.getAsString() << " ("
++                   << T->getTypeClassName() << ")\n";
++      if (U == T) break;
++      T = U;
++    }
++    llvm::errs().flush();
++  }
++
+   return ImplicitCastExpr::Create(
+       Importer.getToContext(), *ToTypeOrErr, E->getCastKind(), *ToSubExprOrErr,
+       &(*ToBasePathOrErr), E->getValueKind(), E->getFPFeatures());
+@@ -9846,7 +10417,8 @@
+       // context (and do not remove it if it was added during the initial
+       // traverse of the 'to' context).
+       auto PosF = ImportedFromDecls.find(ToD);
+-      if (PosF != ImportedFromDecls.end()) {
++      bool WasImportedHere = PosF != ImportedFromDecls.end();
++      if (WasImportedHere) {
+         // In the case of TypedefNameDecl we create the Decl first and only
+         // then we import and set its DeclContext. So, the DC might not be set
+         // when we reach here.
+@@ -10033,8 +10605,14 @@
+   // Import the statement.
+   ASTNodeImporter Importer(*this);
+   ExpectedStmt ToSOrErr = Importer.Visit(FromS);
+-  if (!ToSOrErr)
++  if (!ToSOrErr) {
++    if (getenv("PET_STMT_TRACE")) {
++      llvm::errs() << "  a " << FromS->getStmtClassName()
++                   << " did not come across\n";
++      llvm::errs().flush();
++    }
+     return ToSOrErr;
++  }
+ 
+   if (auto *ToE = dyn_cast<Expr>(*ToSOrErr)) {
+     auto *FromE = cast<Expr>(FromS);
+@@ -10754,7 +11332,7 @@
+                                                           unsigned NumDecls) {
+   if (ODRHandling == ODRHandlingType::Conservative)
+     // Report error at any name conflict.
+-    return make_error<ASTImportError>(ASTImportError::NameConflict);
++    return nameConflictAt(__LINE__);
+   else
+     // Allow to create the new Decl with the same name.
+     return Name;
+@@ -10797,6 +11375,33 @@
+ }
+ 
+ Decl *ASTImporter::MapImported(Decl *From, Decl *To) {
++  if (getenv("PET_MAP_TRACE"))
++    if (auto *RD = llvm::dyn_cast<RecordDecl>(From))
++      if (RD->getNameAsString() == "__normal_iterator") {
++        auto *TD = llvm::dyn_cast<RecordDecl>(To);
++        llvm::errs() << "a __normal_iterator is taken for "
++                     << (const void *)To << ", which is "
++                     << (TD && TD->isCompleteDefinition() ? "a definition"
++                                                          : "a mention")
++                     << ", its chain's definition being "
++                     << (const void *)(TD ? TD->getDefinition() : nullptr)
++                     << "\n";
++        llvm::errs().flush();
++      }
++  if (getenv("PET_MAP_TRACE"))
++    if (auto *FD = llvm::dyn_cast<FieldDecl>(From))
++      if (FD->getNameAsString() == "_M_current") {
++        auto *TD = llvm::dyn_cast<FieldDecl>(To);
++        llvm::errs() << "_M_current " << (const void *)From << " of record "
++                     << (const void *)FD->getParent() << " is taken for "
++                     << (const void *)To << " of record "
++                     << (const void *)(TD ? TD->getParent() : nullptr)
++                     << ", whose definition is "
++                     << (const void *)(TD ? TD->getParent()->getDefinition()
++                                          : nullptr)
++                     << "\n";
++        llvm::errs().flush();
++      }
+   auto [Pos, Inserted] = ImportedDecls.try_emplace(From, To);
+   assert((Inserted || Pos->second == To) &&
+          "Try to import an already imported Decl");

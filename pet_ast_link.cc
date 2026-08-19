@@ -21,6 +21,13 @@
 
 using namespace clang;
 
+/* What the finishing of the link produces is announced to this and read
+ * by nobody: the report below is made from the context the finishing
+ * leaves behind, not from what it announces.  It lasts as long as the
+ * program because the analysis the finishing sets up keeps hold of it.
+ */
+static ASTConsumer nothing_reads_it;
+
 /* Names of the functions that are called and whether they reach a body.
  */
 struct call_collector : RecursiveASTVisitor<call_collector> {
@@ -69,6 +76,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s: cannot link\n", argv[0]);
 		return 1;
 	}
+	pet_linked_ast_finish(linked, nothing_reads_it);
 
 	ASTContext &ctx = pet_linked_ast_context(linked);
 

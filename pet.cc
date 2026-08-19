@@ -895,9 +895,14 @@ static void create_from_args(CompilerInvocation &invocation,
  * says where the output goes are all decided here rather than there.
  * The directory the command was to be run from is passed on, since the
  * paths in it are relative to that and not to wherever pet was started.
+ *
+ * Only "storage" is filled.  Where the pointers to it are taken is the
+ * caller's affair, and it matters: a string appended to a vector of
+ * strings can move every string already in it, so a pointer taken
+ * before the last one is appended points at where a string used to be.
  */
 static void add_compile_commands(const char *path, const char *filename,
-	std::vector<const char *> &Argv, std::vector<std::string> &storage)
+	std::vector<std::string> &storage)
 {
 	std::string error;
 	std::unique_ptr<tooling::CompilationDatabase> db;
@@ -935,9 +940,6 @@ static void add_compile_commands(const char *path, const char *filename,
 			continue;
 		storage.push_back(arg);
 	}
-
-	for (size_t i = 0; i < storage.size(); ++i)
-		Argv.push_back(storage[i].c_str());
 }
 
 /* Create a CompilerInvocation object that stores the command line
@@ -961,7 +963,7 @@ static CompilerInvocation *construct_invocation(const char *filename,
 	Argv.push_back(binary);
 	if (options && options->compile_commands) {
 		add_compile_commands(options->compile_commands, filename,
-					Argv, storage);
+					storage);
 		/* The directory the project builds in is imposed above, so
 		 * the file has to be named in a way that does not depend
 		 * on which directory that is.
@@ -969,7 +971,10 @@ static CompilerInvocation *construct_invocation(const char *filename,
 		llvm::SmallString<128> absolute(filename);
 		llvm::sys::fs::make_absolute(absolute);
 		storage.push_back(std::string(absolute.str()));
-		Argv.push_back(storage.back().c_str());
+		/* Now that nothing more will be added, and not before.
+		 */
+		for (size_t i = 0; i < storage.size(); ++i)
+			Argv.push_back(storage[i].c_str());
 	} else {
 		Argv.push_back(filename);
 	}
@@ -1355,6 +1360,26 @@ static void create_configured_diagnostics(CompilerInstance *Clang)
 	set_implicit_function_declaration_no_error(Diags);
 }
 
+/* Write a unit the way a precompiled header is written, but finish it
+ * first the way a whole unit is finished.
+ *
+ * A precompiled header is a prefix of a unit: whoever includes it goes
+ * on parsing, so clang leaves the end-of-unit work to that reader --
+ * among it the defining of the tables of virtual methods, which is what
+ * marks a virtual method used and so gets its body made.  A unit that is
+ * going to be linked has no such reader.  Left as a prefix, it is
+ * written with the tables and without the methods they name, and the
+ * link has a table pointing at bodies nobody made.
+ *
+ * Saying it is a whole unit is the one thing that has to be said: clang
+ * then finishes it as it finishes any unit it compiles.
+ */
+struct whole_unit_action : public GeneratePCHAction {
+	TranslationUnitKind getTranslationUnitKind() override {
+		return TU_Complete;
+	}
+};
+
 /* Serialise the AST of the C source file called "filename" to "output".
  *
  * The point of doing this here rather than by running the compiler is
@@ -1408,7 +1433,26 @@ static isl_stat emit_ast_for_C_source(isl_ctx *ctx, const char *filename,
 		FO.Inputs.push_back(FrontendInputFile(filename, Language::C));
 	FO.OutputFile = output;
 
-	GeneratePCHAction action;
+	/* What the unit made out of the templates it uses is made before
+	 * it is written down, rather than left to whoever reads it.
+	 *
+	 * A serialised unit is written the way a precompiled header is,
+	 * and a precompiled header leaves the bodies of the
+	 * instantiations it needs to be made again by the unit that
+	 * includes it: that unit has the expressions, so it can ask for
+	 * them.  A linked unit has the expressions of every unit already
+	 * built and asks for nothing, so what is left to be made again
+	 * is never made: std::vector<int>::operator[] is called and
+	 * defined nowhere, in this unit and in every other, and the
+	 * program does not link.
+	 *
+	 * clang has this for readers that cannot ask -- Sema.cpp only
+	 * instantiates at the end of a written unit when it is set --
+	 * and a reader that links is one of them.
+	 */
+	Clang->getLangOpts().PCHInstantiateTemplates = true;
+
+	whole_unit_action action;
 	bool ok = Clang->ExecuteAction(action);
 
 	delete Clang;
@@ -1581,6 +1625,17 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 	ASTContext &ast_context = pet_linked_ast_context(linked);
 	Preprocessor &PP = pet_linked_ast_preprocessor(linked);
 	isl_union_map *vb;
+
+	/* A scop can be written inside a template, and a link stops short
+	 * of instantiating the templates a unit uses, so the unit is
+	 * finished before it is scanned.  Nothing here generates code
+	 * from what that produces -- what is scanned is the context it
+	 * leaves behind -- so it is announced to a consumer that reads
+	 * nothing, which lasts as long as the program because the
+	 * analysis the finishing sets up keeps hold of it.
+	 */
+	static ASTConsumer nothing_reads_it;
+	pet_linked_ast_finish(linked, nothing_reads_it);
 
 	vb = isl_union_map_empty(isl_space_params_alloc(ctx, 0));
 

@@ -74,6 +74,7 @@ set(PET_SOURCES
   inliner.cc
   isl_id_to_pet_expr.c
   killed_locals.cc
+  link_equivalence.cc
   loc.c
   nest.c
   options.c
