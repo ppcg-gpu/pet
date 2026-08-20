@@ -1723,14 +1723,15 @@ static void offer_bodies(struct pet_linked_ast *linked,
 
 /* Import every top level declaration of "src" into the linked context.
  */
-static void link_unit(struct pet_linked_ast *linked, ASTUnit *src)
+static void link_unit(struct pet_linked_ast *linked, ASTUnit *src,
+	unsigned unit)
 {
 	ASTUnit *target = linked->units[0].get();
 	size_t first = linked->imported.size();
 	link_importer importer(target->getASTContext(),
 		target->getFileManager(), src->getASTContext(),
 		src->getFileManager(), /*MinimalImport=*/false,
-		linked->shared, linked->units.size(), linked->imported);
+		linked->shared, unit, linked->imported);
 	for (Decl *d : src->getASTContext().getTranslationUnitDecl()->decls()) {
 		auto res = importer.Import(d);
 		if (res)
@@ -1757,10 +1758,95 @@ static void link_unit(struct pet_linked_ast *linked, ASTUnit *src)
 		give_c_linkage(linked, linked->imported[i]);
 }
 
+/* Give the linked context the OpenMP of whichever unit asks for most.
+ *
+ * A linked context has one set of language options, and it had the ones
+ * of whichever unit happened to be read first.  A unit compiled with
+ * OpenMP, imported into a context that was not, keeps its directives --
+ * the importer carries them -- and the code generator then meets a
+ * parallel region in a context that says OpenMP is off and stops on
+ * "Not in OpenMP mode".  Which of the two happens is decided by nothing
+ * but the order the files were named in, and the order the files were
+ * named in should decide nothing.
+ *
+ * What is adopted is the whole of one unit's OpenMP rather than a blend
+ * of several: these settings go together -- a version, and the choices
+ * that were made for it -- and a mixture of them is a configuration no
+ * unit was compiled with.  The unit asking for the highest version is
+ * the one whose constructs need the most to be generated, so its
+ * settings are the ones that can generate all of them.
+ *
+ * The options are held by the unit and reached through a const
+ * reference; the object itself was never const, and the context holds
+ * the same one by reference, so writing here is what the context reads.
+ */
+static void adopt_openmp(struct pet_linked_ast *linked)
+{
+	LangOptions &to =
+		const_cast<LangOptions &>(linked->units[0]->getLangOpts());
+	const LangOptions *most = &to;
+
+	for (auto &unit : linked->units)
+		if (unit->getLangOpts().OpenMP > most->OpenMP)
+			most = &unit->getLangOpts();
+
+	if (most == &to)
+		return;
+
+	to.OpenMP = most->OpenMP;
+	to.OpenMPExtensions = most->OpenMPExtensions;
+	to.OpenMPSimd = most->OpenMPSimd;
+	to.OpenMPUseTLS = most->OpenMPUseTLS;
+	to.OpenMPIsTargetDevice = most->OpenMPIsTargetDevice;
+	to.OpenMPCUDAMode = most->OpenMPCUDAMode;
+	to.OpenMPIRBuilder = most->OpenMPIRBuilder;
+	to.OpenMPCUDANumSMs = most->OpenMPCUDANumSMs;
+	to.OpenMPCUDABlocksPerSM = most->OpenMPCUDABlocksPerSM;
+	to.OpenMPCUDAReductionBufNum = most->OpenMPCUDAReductionBufNum;
+	to.OpenMPTargetDebug = most->OpenMPTargetDebug;
+	to.OpenMPOptimisticCollapse = most->OpenMPOptimisticCollapse;
+	to.OpenMPThreadSubscription = most->OpenMPThreadSubscription;
+	to.OpenMPTeamSubscription = most->OpenMPTeamSubscription;
+	to.OpenMPNoThreadState = most->OpenMPNoThreadState;
+	to.OpenMPNoNestedParallelism = most->OpenMPNoNestedParallelism;
+	to.OpenMPOffloadMandatory = most->OpenMPOffloadMandatory;
+	to.OpenMPForceUSM = most->OpenMPForceUSM;
+}
+
+/* Which unit the rest are linked into.
+ *
+ * A union widens: a set holding one unit written in C++ is a set whose
+ * link speaks C++, because everything a C unit says can be said in C++
+ * and the reverse is not true.  A context built for C has no lookup
+ * table for its outermost level -- the reader goes by identifier there
+ * -- and a constructor, a destructor or an operator arriving from a C++
+ * unit is a name that is no identifier, which that reader stops on.
+ *
+ * So the first unit written in C++ is the one the others are linked
+ * into, and only a set with no C++ in it at all is linked into the unit
+ * that happened to be named first.  Which file was named first decides
+ * nothing.
+ *
+ * The language cannot be settled after the fact instead: a context is
+ * built for its language, with the types and the tables that language
+ * needs, and saying afterwards that it speaks another one changes the
+ * answer to the question without changing anything that was decided by
+ * the old answer.
+ */
+static size_t unit_to_link_into(struct pet_linked_ast *linked)
+{
+	for (size_t i = 0; i < linked->units.size(); ++i)
+		if (linked->units[i]->getLangOpts().CPlusPlus)
+			return i;
+
+	return 0;
+}
+
 /* Link the translation units serialised in the "n" files in "files".
  *
- * The first unit is read directly into the result; it is the context
- * everything else is imported into.
+ * The unit the others are linked into is chosen rather than taken: see
+ * unit_to_link_into.  It is moved to the front, because everything
+ * downstream of here knows the target as the first of the units.
  *
  * The result is linked and not yet finished: finishing it produces
  * declarations, and where those go is the caller's to say, so it is
@@ -1780,19 +1866,40 @@ struct pet_linked_ast *pet_ast_link(const char **files, int n)
 		return NULL;
 	}
 	linked->units.push_back(std::move(first));
-	linked->shared = std::make_shared<ASTImporterSharedState>(
-		*linked->units[0]->getASTContext().getTranslationUnitDecl());
 
+	/* Every unit is read before any is linked.  What language the
+	 * linked context speaks has to be settled before the first
+	 * import, and it cannot be settled without having seen them all.
+	 * They are all held anyway, so nothing is kept that was not.
+	 */
 	for (int i = 1; i < n; ++i) {
 		std::unique_ptr<ASTUnit> src = read_unit(linked, files[i]);
 		if (!src) {
 			pet_ast_link_free(linked);
 			return NULL;
 		}
-		link_unit(linked, src.get());
 		linked->units.push_back(std::move(src));
 	}
 
+	size_t target = unit_to_link_into(linked);
+
+	if (target != 0)
+		std::swap(linked->units[0], linked->units[target]);
+
+	/* What has already been imported is shared, and what it is shared
+	 * against is the target, so it is made once the target is known.
+	 */
+	linked->shared = std::make_shared<ASTImporterSharedState>(
+		*linked->units[0]->getASTContext().getTranslationUnitDecl());
+
+	adopt_openmp(linked);
+
+	/* The number a unit is known by is where it stands in the list,
+	 * which is what a name of its own is built from, so it is said
+	 * rather than taken from how many have been read so far.
+	 */
+	for (int i = 1; i < n; ++i)
+		link_unit(linked, linked->units[i].get(), i);
 
 	return linked;
 }
