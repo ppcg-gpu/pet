@@ -1811,6 +1811,78 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 	return scop;
 }
 
+/* Go over every function of "linked" a scop could be entered from and
+ * write one line about each to "out".
+ *
+ * The line says what the function is called, the file and line it was
+ * written on, whether a scop came out of it and how many statements
+ * that scop holds.  The file is on the line so that what came from the
+ * program and what came from a system header can be told apart
+ * afterwards, without going over the whole thing a second time: most of
+ * what a link of C++ offers was written by whoever wrote the standard
+ * library, and a map of the program must not be a map of that.
+ *
+ * Nothing is kept.  What this produces is the account and not the
+ * scops: holding a hundred thousand of them to hand one back would ask
+ * for the memory of the whole program at once.
+ */
+int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
+	FILE *out)
+{
+	pet_options *options;
+	std::vector<Independent> independent;
+
+	options = isl_ctx_peek_pet_options(ctx);
+	if (!options)
+		isl_die(ctx, isl_error_invalid, "no pet options found",
+			return -1);
+	if (!options->autodetect)
+		isl_die(ctx, isl_error_unsupported,
+			"mapping a linked AST requires autodetect",
+			return -1);
+
+	ASTContext &ast_context = pet_linked_ast_context(linked);
+	Preprocessor &PP = pet_linked_ast_preprocessor(linked);
+	SourceManager &sm = ast_context.getSourceManager();
+
+	static ASTConsumer nothing_reads_it;
+	pet_linked_ast_finish(linked, nothing_reads_it);
+
+	isl_union_map *vb =
+		isl_union_map_empty(isl_space_params_alloc(ctx, 0));
+	std::vector<FunctionDecl *> entries =
+		entries_of(ast_context.getTranslationUnitDecl(), NULL);
+
+	size_t done = 0;
+
+	for (FunctionDecl *body : entries) {
+		ScopLoc loc;
+		PetScan ps(PP, ast_context, body, loc, options,
+			isl_union_map_copy(vb), independent);
+		pet_scop *scop = ps.scan(body);
+		std::string where = body->getLocation().printToString(sm);
+
+		fprintf(out, "%s\t%s\t%s\t%d\t%s\n",
+			body->getQualifiedNameAsString().c_str(),
+			where.c_str(), scop ? "scop" : "none",
+			scop ? scop->n_stmt : 0,
+			ps.first_stop.empty() ? "-" : ps.first_stop.c_str());
+		pet_scop_free(scop);
+
+		/* Going over a hundred thousand functions takes long
+		 * enough that something has to say it is still going,
+		 * or the only way to tell is to watch the file grow.
+		 */
+		if (++done % 1000 == 0)
+			fprintf(stderr, "gone over %zu of %zu function(s)\n",
+				done, entries.size());
+	}
+
+	isl_union_map_free(vb);
+
+	return 0;
+}
+
 /* Serialise the AST of the C source file "input" to the file "output".
  *
  * The options are the ones the context was given, so that the unit is

@@ -556,6 +556,24 @@ struct pet_linked_ast;
 __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 	struct pet_linked_ast *linked, const char *function);
 
+/* Go over every function of a linked AST that a scop could be entered
+ * from, and write one line to "out" for each: what it is called, where
+ * it was written, whether a scop came out of it and how many statements
+ * that scop holds.
+ *
+ * Extraction answers "find me a scop" and stops at the first one it
+ * finds.  This answers "go over all of them and say where each one
+ * ended", which is a different question: what it produces is a map of
+ * where the program stops being something a scop can hold.  Set
+ * PET_SCOP_TRACE in the environment to have each of those places named
+ * as well.
+ *
+ * Returns 0 on success and -1 on error.  Requires the autodetect option
+ * for the same reason extraction does.
+ */
+int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
+	FILE *out);
+
 /* Extract a pet_scop from a C source file.
  * If function is not NULL, then the pet_scop is extracted from
  * a function with that name.

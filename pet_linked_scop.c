@@ -20,6 +20,7 @@ struct options {
 	struct isl_options	*isl;
 	struct pet_options	*pet;
 	char			*function;
+	int			map;
 };
 
 ISL_ARGS_START(struct options, options_args)
@@ -27,6 +28,9 @@ ISL_ARG_CHILD(struct options, isl, "isl", &isl_options_args, "isl options")
 ISL_ARG_CHILD(struct options, pet, NULL, &pet_options_args, "pet options")
 ISL_ARG_STR(struct options, function, 0, "function", "name", NULL,
 	"only extract from the function with this name")
+ISL_ARG_BOOL(struct options, map, 0, "map", 0,
+	"go over every function and say where each scop ended, "
+	"rather than extracting one")
 ISL_ARGS_END
 
 ISL_ARG_DEF(options, struct options, options_args)
@@ -85,6 +89,19 @@ int main(int argc, char **argv)
 		pet_ast_link_free(linked);
 		isl_ctx_free(ctx);
 		return EXIT_FAILURE;
+	}
+
+	/* Asked for the map, every function is gone over and nothing is
+	 * extracted: the two are different questions and the answer to
+	 * one is not the answer to the other.
+	 */
+	if (options->map) {
+		int r = pet_linked_ast_map(ctx, linked, stdout);
+
+		pet_ast_link_free(linked);
+		isl_ctx_free(ctx);
+
+		return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 	}
 
 	scop = pet_scop_extract_from_linked_ast(ctx, linked, options->function);
