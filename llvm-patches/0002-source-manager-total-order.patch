@@ -1,0 +1,29 @@
+--- a/clang/lib/Basic/SourceManager.cpp
++++ b/clang/lib/Basic/SourceManager.cpp
+@@ -2108,7 +2108,25 @@
+     return std::make_pair(true, LOffs.second < ROffs.second);
+   }
+ 
+-  llvm_unreachable("Unsortable locations found");
++  // Neither location sits in a buffer this knows how to place, and neither
++  // reached a root that the other shares.  Two files that were never part
++  // of one translation unit are like that: an AST linked out of many units
++  // holds them all in one manager, and the include chains of two of those
++  // units meet nowhere.
++  //
++  // The order between them is settled here rather than left undefined, for
++  // the same reason and in the same way as it is settled just above for two
++  // built-in buffers of different files: by file ID.  What that gives is a
++  // total order, and the same one every time the same files are read in the
++  // same way, which is what the callers of this take it to be.  It is not
++  // the order the files were read in: a file loaded from elsewhere is given
++  // a negative ID, and later ones are given smaller ones still.
++  //
++  // Left undefined, the order is a partial one while everything that asks
++  // takes it for total, and whoever asks about two units at once -- the
++  // declaration printer, weighing an attribute against the record it is
++  // written on, is one -- ends here.
++  return std::make_pair(true, LOffs.first < ROffs.first);
+ }
+ 
+ void SourceManager::PrintStats() const {

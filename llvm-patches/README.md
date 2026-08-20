@@ -19,6 +19,38 @@ Applied to LLVM **22.1.5** (tag `llvmorg-22.1.5`, commit
 
     cd llvm-project
     patch -p1 < .../ThirdParty/pet/llvm-patches/0001-ast-importer-for-linking.patch
+    patch -p1 < .../ThirdParty/pet/llvm-patches/0002-source-manager-total-order.patch
+
+## 0002-source-manager-total-order.patch
+
+`SourceManager::isBeforeInTranslationUnit` walks up the include chains
+of both locations looking for a root they share.  Two files that were
+never part of one translation unit have none, and it ends in
+`llvm_unreachable("Unsortable locations found")`.  A linked AST holds
+the files of every unit in one manager, so that is not a corner case
+there but the ordinary case: any two units at all.
+
+The order is settled instead, by file ID, which is what the same
+function already does a few lines earlier for two built-in buffers of
+different files -- "we just claim that lower IDs come first".  What that
+buys is a total order, and the same one every time the same files are
+read the same way, which is what every caller of this already takes it
+to be.  It is deliberately not claimed to be the order the units
+arrived in: a file loaded from elsewhere is given a negative ID and
+later ones smaller ones still, so by file ID the last unit read sorts
+first.
+
+Found by the declaration printer, which weighs the location of an
+attribute against the location of the record it is written on to decide
+which side to print it: over 49 units those two are routinely in
+different units.  It will not stay found there -- pet orders statements
+by where they were written, and a scop built out of several units asks
+this of every pair.
+
+Going over every function of 49 units, this took the walk from 1867
+functions to 35592.  With it applied, linking the 51 units the engine
+acceptance was taken from gives 30393 functions and 4665 globals with
+nothing refused, as it did before.
 
 ## 0001-ast-importer-for-linking.patch
 
