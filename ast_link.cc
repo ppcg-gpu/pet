@@ -1589,10 +1589,19 @@ static LinkageSpecDecl *c_linkage(struct pet_linked_ast *linked)
 {
 	ASTContext &ctx = linked->units[0]->getASTContext();
 
-	if (!linked->c_linkage)
+	if (!linked->c_linkage) {
 		linked->c_linkage = LinkageSpecDecl::Create(ctx,
 			ctx.getTranslationUnitDecl(), SourceLocation(),
 			SourceLocation(), c_language(), /*HasBraces=*/true);
+		/* And it goes in the unit's list of declarations.  Naming
+		 * the unit as its context is not the same as being in it:
+		 * whatever is put here would otherwise be reachable only
+		 * by whoever was handed it, and the code generator is
+		 * handed everything.  A walk of the unit -- which is how
+		 * a scop is entered -- would find no C function at all.
+		 */
+		ctx.getTranslationUnitDecl()->addDecl(linked->c_linkage);
+	}
 
 	return linked->c_linkage;
 }
