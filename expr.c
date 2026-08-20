@@ -202,6 +202,9 @@ static __isl_give isl_map *extend_range(__isl_take isl_map *access, int n)
 {
 	isl_id *id;
 
+	if (!access)
+		return NULL;
+
 	id = isl_map_get_tuple_id(access, isl_dim_out);
 
 	if (!isl_map_range_is_wrapping(access)) {
@@ -917,6 +920,8 @@ static __isl_give isl_union_map *construct_access_relation(
 		isl_die(isl_map_get_ctx(access), isl_error_internal,
 			"number of indices greater than depth",
 			access = isl_map_free(access));
+	if (!access)
+		return NULL;
 
 	if (dim != expr->acc.depth)
 		access = extend_range(access, expr->acc.depth - dim);
