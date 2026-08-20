@@ -1596,7 +1596,8 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 }
 
 /* Collect into "found" every function of "dc" that has a body, and that
- * goes by "name" when a name is given.
+ * goes by "name" when a name is given.  "seen" is what has been offered
+ * already.
  *
  * A function is not always a child of the translation unit.  A unit
  * written in C is held inside a linkage specification once it is linked
@@ -1613,68 +1614,94 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
  *
  * A function body holds declarations of its own, and a class declared
  * there has methods like any other, so the walk descends into a body as
- * well.
+ * well -- after offering the function itself, so that what contains
+ * comes before what is contained.  Taking the first function a scop can
+ * be had from means taking the outermost one, not whatever was written
+ * deepest inside it.
+ *
+ * What the compiler wrote is passed over.  A record gets a copy
+ * assignment and a destructor whether or not anyone asked, and once the
+ * unit is finished those have bodies like any other function -- 1984 of
+ * them over an engine of 49 units.  pet reads a function through the
+ * range of source it was written in, and there is no such range for
+ * something nobody wrote.
+ *
+ * What a template was instantiated into is in no context's list of
+ * declarations: it hangs off the template it was made from.  A function
+ * written once and used at twenty types is twenty functions with a body,
+ * and walking only the lists finds none of them.  The instantiations are
+ * asked of the canonical declaration alone, because every declaration of
+ * one template answers with the same set and asking each of them walks
+ * that set once per declaration.
  */
 static void collect_entries(DeclContext *dc, const char *name,
-	std::vector<FunctionDecl *> &found)
+	std::vector<FunctionDecl *> &found,
+	std::set<const FunctionDecl *> &seen)
 {
+	auto offer = [&](FunctionDecl *fd) {
+		const FunctionDecl *def;
+
+		if (!fd->hasBody(def))
+			return;
+		if (def->isImplicit())
+			return;
+		if (!seen.insert(def).second)
+			return;
+		if (name &&
+		    fd->getNameInfo().getAsString() != name &&
+		    fd->getQualifiedNameAsString() != name)
+			return;
+		found.push_back(const_cast<FunctionDecl *>(def));
+	};
+
 	for (Decl *d : dc->decls()) {
 		if (auto *fd = dyn_cast<FunctionDecl>(d)) {
 			const FunctionDecl *def;
 
-			if (!fd->hasBody(def))
-				continue;
+			offer(fd);
 			/* Whatever the body declares is declared once, in
 			 * the declaration that carries the body.
 			 */
-			if (fd == def)
-				collect_entries(fd, name, found);
-			if (name &&
-			    fd->getNameInfo().getAsString() != name &&
-			    fd->getQualifiedNameAsString() != name)
-				continue;
-			/* Every declaration of a function points at the
-			 * one body it has, so a function declared twice
-			 * would otherwise be offered twice.
-			 */
-			if (std::find(found.begin(), found.end(), def) !=
-			    found.end())
-				continue;
-			found.push_back(const_cast<FunctionDecl *>(def));
+			if (fd->hasBody(def) && fd == def)
+				collect_entries(fd, name, found, seen);
 			continue;
 		}
 
 		if (isa<LinkageSpecDecl>(d) || isa<NamespaceDecl>(d) ||
 		    isa<RecordDecl>(d))
-			collect_entries(cast<DeclContext>(d), name, found);
+			collect_entries(cast<DeclContext>(d), name, found, seen);
 
-		/* What a template was instantiated into is in no context's
-		 * list of declarations: it hangs off the template it was
-		 * made from.  A function written once and used at twenty
-		 * types is twenty functions with a body, and walking only
-		 * the lists finds none of them.
-		 */
-		if (auto *td = dyn_cast<ClassTemplateDecl>(d))
-			for (auto *spec : td->specializations())
-				collect_entries(spec, name, found);
-		if (auto *td = dyn_cast<FunctionTemplateDecl>(d))
-			for (auto *spec : td->specializations()) {
-				const FunctionDecl *def;
+		if (auto *td = dyn_cast<ClassTemplateDecl>(d)) {
+			if (td == td->getCanonicalDecl())
+				for (auto *spec : td->specializations())
+					collect_entries(spec, name, found, seen);
+		}
+		if (auto *td = dyn_cast<FunctionTemplateDecl>(d)) {
+			if (td == td->getCanonicalDecl())
+				for (auto *spec : td->specializations()) {
+					const FunctionDecl *def;
 
-				if (!spec->hasBody(def))
-					continue;
-				if (spec == def)
-					collect_entries(spec, name, found);
-				if (name &&
-				    spec->getNameInfo().getAsString() != name &&
-				    spec->getQualifiedNameAsString() != name)
-					continue;
-				if (std::find(found.begin(), found.end(), def) !=
-				    found.end())
-					continue;
-				found.push_back(const_cast<FunctionDecl *>(def));
-			}
+					offer(spec);
+					if (spec->hasBody(def) && spec == def)
+						collect_entries(spec, name,
+								found, seen);
+				}
+		}
 	}
+}
+
+/* Every function of "dc" that has a body, and that goes by "name" when a
+ * name is given.
+ */
+static std::vector<FunctionDecl *> entries_of(DeclContext *dc,
+	const char *name)
+{
+	std::vector<FunctionDecl *> found;
+	std::set<const FunctionDecl *> seen;
+
+	collect_entries(dc, name, found, seen);
+
+	return found;
 }
 
 /* Extract a pet_scop from the function called "function" in "linked".
@@ -1721,16 +1748,16 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 
 	vb = isl_union_map_empty(isl_space_params_alloc(ctx, 0));
 
-	std::vector<FunctionDecl *> entries;
-	collect_entries(ast_context.getTranslationUnitDecl(), function, entries);
+	std::vector<FunctionDecl *> entries =
+		entries_of(ast_context.getTranslationUnitDecl(), function);
 
 	/* What the walk found, so that a name that was not found says so
 	 * rather than looking like a function holding no scop.
 	 */
 	if (getenv("PET_ENTRY_TRACE")) {
-		std::vector<FunctionDecl *> all;
+		std::vector<FunctionDecl *> all =
+			entries_of(ast_context.getTranslationUnitDecl(), NULL);
 
-		collect_entries(ast_context.getTranslationUnitDecl(), NULL, all);
 		fprintf(stderr, "the link offers %zu function(s) with a body, "
 			"%zu of them called %s\n", all.size(), entries.size(),
 			function ? function : "anything");
@@ -1743,6 +1770,32 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 		isl_die(ctx, isl_error_invalid,
 			"no function of that name has a body here",
 			isl_union_map_free(vb); return NULL);
+
+	/* A name can fit more than one function: an instantiation of a
+	 * template goes by the name of the template, arguments and all,
+	 * and so does every other instantiation of it.  Taking whichever
+	 * of them a scop comes out of first would answer about a function
+	 * that was never asked for and say nothing about which.  So the
+	 * ones that fit are named and nothing is extracted.
+	 */
+	if (function && entries.size() > 1) {
+		PrintingPolicy policy(ast_context.getLangOpts());
+
+		policy.SuppressScope = false;
+		fprintf(stderr, "%zu functions are called %s:\n",
+			entries.size(), function);
+		for (FunctionDecl *fd : entries) {
+			std::string full;
+			llvm::raw_string_ostream os(full);
+
+			fd->getNameForDiagnostic(os, policy,
+						/*Qualified=*/true);
+			fprintf(stderr, "  %s\n", full.c_str());
+		}
+		isl_die(ctx, isl_error_invalid,
+			"more than one function goes by that name",
+			isl_union_map_free(vb); return NULL);
+	}
 
 	for (FunctionDecl *body : entries) {
 		ScopLoc loc;
