@@ -1542,12 +1542,19 @@ void pet_linked_ast_finish(struct pet_linked_ast *linked,
 	 * The whole unit is gone through rather than the list of what
 	 * was imported, because that list holds what the importer was
 	 * asked for and not what it made: an instantiation reached
-	 * through a template is in neither.  Announcing what was read
-	 * as well costs nothing, since a declaration announced twice is
-	 * emitted once.
+	 * through a template is in neither.
+	 *
+	 * Each is announced once.  One declaration of the target is
+	 * reached from as many units as name it, and the list holds it
+	 * once for each of them; announcing it twice generates it twice,
+	 * and the second time the code generator finds a function that
+	 * already has a body and stops.  The constructor of
+	 * std::_Base_bitset<1> is one that two units name.
 	 */
+	std::set<Decl *> announced;
+
 	for (Decl *d : linked->imported)
-		if (worth_announcing(d))
+		if (worth_announcing(d) && announced.insert(d).second)
 			consumer.HandleTopLevelDecl(DeclGroupRef(d));
 
 
