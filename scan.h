@@ -186,6 +186,31 @@ struct PetScan {
 	/* Sequence number of the next temporary inlined return variable. */
 	int n_ret;
 
+	/* The functions whose summary is being worked out right now, and
+	 * how many of them there are.
+	 *
+	 * Working out the summary of a function means going over its body,
+	 * and going over a body means asking for the summary of what it
+	 * calls.  Two functions that call each other therefore ask after
+	 * each other for as long as there is stack to ask with.  The cache
+	 * does not stop it: an answer is put there once it has been worked
+	 * out, and a cycle is exactly the case where it never is.  Nor is
+	 * one cache enough, since each of these goes over the body with a
+	 * scan of its own; the set is shared down the whole nest instead.
+	 */
+	std::set<clang::FunctionDecl *> *in_summary;
+	int summary_depth;
+
+	/* Where the first place a scop stopped was, and what stopped it.
+	 *
+	 * A scan meets many such places -- ten thousand over a function is
+	 * not unusual -- and they are all written out when asked for.  But
+	 * a map of a program wants one line for each function, and what
+	 * belongs on that line is the first: the others are what was left
+	 * over after the scop had already ended.
+	 */
+	std::string first_stop;
+
 	PetScan(clang::Preprocessor &PP, clang::ASTContext &ast_context,
 		clang::DeclContext *decl_context, ScopLoc &loc,
 		pet_options *options, __isl_take isl_union_map *value_bounds,
@@ -198,7 +223,7 @@ struct PetScan {
 		value_bounds(value_bounds), last_line(0), current_line(0),
 		independent(independent), n_rename(0),
 		declared_names_collected(false), call2id(NULL),
-		n_arg(0), n_ret(0) {
+		n_arg(0), n_ret(0), in_summary(NULL), summary_depth(0) {
 		id_size = isl_id_to_pet_expr_alloc(ctx, 0);
 	}
 

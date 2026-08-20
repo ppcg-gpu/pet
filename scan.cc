@@ -232,11 +232,35 @@ PetScan::~PetScan()
 }
 
 /* Report a diagnostic on the range "range", unless autodetect is set.
+ *
+ * Under autodetect nothing is reported, because a construct a scop
+ * cannot hold is not a fault of the source: the scop simply ends there.
+ * But where it ends, and on what, is the only thing that says why a
+ * function of five hundred lines came out as nine statements, and
+ * throwing it away is why nobody could say.  So it is written out --
+ * one line for each place a scop stopped, saying where and what --
+ * whenever PET_SCOP_TRACE is set in the environment.
  */
 void PetScan::report(SourceRange range, unsigned id)
 {
-	if (options->autodetect)
+	if (options->autodetect) {
+		DiagnosticsEngine &diag = PP.getDiagnostics();
+		SourceLocation loc = range.getBegin();
+		std::string where = loc.printToString(PP.getSourceManager());
+		StringRef why = diag.getDiagnosticIDs()->getDescription(id);
+
+		/* The first of them is kept, because that is the one that
+		 * ended the scop; the rest are what was left over after it
+		 * had ended.
+		 */
+		if (first_stop.empty())
+			first_stop = where + ": " + why.str();
+
+		if (getenv("PET_SCOP_TRACE"))
+			fprintf(stderr, "a scop stops at %s: %s\n",
+				where.c_str(), why.str().c_str());
 		return;
+	}
 
 	SourceLocation loc = range.getBegin();
 	DiagnosticsEngine &diag = PP.getDiagnostics();
@@ -2484,6 +2508,16 @@ __isl_give pet_function_summary *PetScan::get_summary_from_tree(
 	return summary;
 }
 
+/* How far a chain of summaries is followed.
+ *
+ * A summary is worked out from the body of what is called, which is
+ * worked out from the bodies of what that calls, and a program gives no
+ * reason for that to be shallow.  A cycle is caught for what it is;
+ * this is the second line, for a chain that is merely long, and it is
+ * set where the chains of a real program do not reach.
+ */
+static const int max_summary_depth = 64;
+
 /* Extract a function summary from the body of "fd", if possible.
  * Return this->no_summary if the body cannot be fully analyzed.
  *
@@ -2506,14 +2540,49 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 	if (summary_cache.find(fd) != summary_cache.end())
 		return pet_function_summary_copy(summary_cache[fd]);
 
+	/* A function whose summary is already being worked out is one this
+	 * call came from, and asking again is asking the question that has
+	 * not been answered yet.  It is left without a summary, which is
+	 * what a call to something nothing is known about gets anyway, and
+	 * the answer is not remembered: it is true of this way round and
+	 * not of the function.
+	 *
+	 * Two functions of an engine that call each other went round this
+	 * sixteen thousand times before the stack ran out, whatever the
+	 * stack was set to.
+	 */
+	std::set<FunctionDecl *> mine;
+	std::set<FunctionDecl *> *active = in_summary ? in_summary : &mine;
+
+	if (active->find(fd) != active->end() ||
+	    summary_depth >= max_summary_depth) {
+		if (getenv("PET_SCOP_TRACE")) {
+			fprintf(stderr, "no summary for %s: it is %s\n",
+				fd->getNameAsString().c_str(),
+				active->find(fd) != active->end() ?
+					"already being worked out" :
+					"deeper than summaries are followed");
+			for (FunctionDecl *on : *active)
+				fprintf(stderr, "  by way of %s\n",
+					on->getNameAsString().c_str());
+		}
+		return pet_function_summary_copy(no_summary);
+	}
+
+	active->insert(fd);
+
 	save_autodetect = options->autodetect;
 	options->autodetect = 1;
 	PetScan body_scan(PP, ast_context, fd, loc, options,
 				isl_union_map_copy(value_bounds), independent);
 
+	body_scan.in_summary = active;
+	body_scan.summary_depth = summary_depth + 1;
 	body_scan.return_root = fd->getBody();
 	tree = body_scan.extract(fd->getBody(), false);
 	options->autodetect = save_autodetect;
+
+	active->erase(fd);
 
 	if (body_scan.partial) {
 		pet_tree_free(tree);
