@@ -1,17 +1,33 @@
-start: 28
-end: 39
+start: 17
+end: 49
 indent: "\t"
 context: '[N] -> {  : 0 <= N <= 2147483647 }'
-schedule: '{ domain: "[N] -> { S_1[]; S_0[] }", child: { sequence: [ { filter: "{
-  S_0[] }" }, { filter: "{ S_1[] }" } ] } }'
+schedule: '{ domain: "[N] -> { S_0[]; S_3[]; S_1[]; S_2[] }", child: { sequence: [
+  { filter: "{ S_0[] }" }, { filter: "{ S_2[] }" }, { filter: "{ S_3[] }" }, { filter:
+  "{ S_1[] }" } ] } }'
 arrays:
 - context: '[N] -> {  : N >= 0 }'
   extent: '[N] -> { A[i0] : 0 <= i0 < N }'
   element_type: int
   element_size: 4
+  declared: 1
 statements:
+- line: 3
+  domain: '{ S_0[] }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[N] -> { S_0[] -> A[o0] : 0 <= o0 < N }'
+        index: '[N] -> { S_0[] -> A[] }'
+        depth: 1
+        reference: __pet_ref_0
+        kill: 1
 - line: 4
-  domain: '[N] -> { S_0[] }'
+  domain: '{ S_2[] }'
   body:
     type: expression
     expr:
@@ -19,14 +35,24 @@ statements:
       operation: =
       arguments:
       - type: access
-        index: '[N] -> { S_0[] -> A[(0)] }'
-        reference: __pet_ref_0
+        index: '[N] -> { S_2[] -> A[(0)] }'
+        reference: __pet_ref_1
         read: 0
         write: 1
       - type: int
         value: 1
-- line: -1
-  domain: '[N] -> { S_1[] }'
+- line: 6
+  domain: '{ S_3[] }'
+  body:
+    type: return
+    expr:
+      type: access
+      index: '[N] -> { S_3[] -> [(N)] }'
+      reference: __pet_ref_2
+      read: 1
+      write: 0
+- line: 3
+  domain: '{ S_1[] }'
   body:
     type: expression
     expr:
@@ -37,5 +63,5 @@ statements:
         killed: '[N] -> { S_1[] -> A[o0] : 0 <= o0 < N }'
         index: '[N] -> { S_1[] -> A[] }'
         depth: 1
-        reference: __pet_ref_1
+        reference: __pet_ref_3
         kill: 1
