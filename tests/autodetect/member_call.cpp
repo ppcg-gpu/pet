@@ -6,9 +6,9 @@
  * therefore not a call at all, and a loop holding one held nothing --
  * which is where the scop of llama_decode ended, on ctx->decode(batch).
  *
- * What the scop keeps here is the one statement of the loop; the body
- * of the method is a separate matter, since it reaches its members
- * through this.
+ * The body comes with it: what the method reaches through this is the
+ * object it was called on, so the scop reads b.k, and the loop holds
+ * the argument, the body and the assignment.
  */
 struct box {
 	int k;

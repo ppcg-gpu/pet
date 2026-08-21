@@ -707,6 +707,40 @@ __isl_give pet_expr *PetScan::extract_index_expr(ValueDecl *decl)
  * If "expr" is a reference to an enum constant, then return
  * an integer expression instead, representing the value of the enum constant.
  */
+/* The object a method was called on, as something that can be named.
+ *
+ * A method reaches its members through "this", which the source does
+ * not have to write and which clang gives no declaration: there is a
+ * CXXThisExpr and nothing behind it.  Everything else a scop reads
+ * through is a declaration -- a parameter, a local -- and every path
+ * that works out which element is meant starts from one.
+ *
+ * So one is made, once for each method, and "this" is read through it
+ * exactly as "p" is read through in "p->field".  Made once and kept,
+ * because the body of a method is extracted by one scan and the object
+ * it was called on is bound by another, and the two have to be talking
+ * about the same thing.
+ */
+static ImplicitParamDecl *implicit_object(ASTContext &ast_context,
+	CXXMethodDecl *method)
+{
+	static std::map<CXXMethodDecl *, ImplicitParamDecl *> known;
+	std::map<CXXMethodDecl *, ImplicitParamDecl *>::iterator it;
+
+	it = known.find(method);
+	if (it != known.end())
+		return it->second;
+
+	IdentifierInfo *name = &ast_context.Idents.get("__pet_this");
+	ImplicitParamDecl *decl = ImplicitParamDecl::Create(ast_context,
+		method, method->getLocation(), name, method->getThisType(),
+		ImplicitParamKind::CXXThis);
+
+	known[method] = decl;
+
+	return decl;
+}
+
 /* Extract an index expression from "expr".
  *
  * Parentheses and the wrapper clang puts around an expression whose
@@ -733,9 +767,20 @@ __isl_give pet_expr *PetScan::extract_index_expr(Expr *expr)
 	case Stmt::ConstantExprClass:
 		return extract_index_expr(
 			cast<ConstantExpr>(expr)->getSubExpr());
-	default:
-		unsupported(expr);
+	case Stmt::CXXThisExprClass: {
+		CXXMethodDecl *method;
+
+		method = dyn_cast_or_null<CXXMethodDecl>(decl_context);
+		if (method)
+			return extract_index_expr(
+				implicit_object(ast_context, method));
+		break;
 	}
+	default:
+		break;
+	}
+
+	unsupported(expr);
 	return NULL;
 }
 
@@ -2119,6 +2164,9 @@ __isl_give pet_tree *PetScan::update_loc(__isl_take pet_tree *tree, Stmt *stmt)
 }
 
 /* Is "expr" of a type that can be converted to an access expression?
+ *
+ * "this" is one: a method reaches its members through it, and what it
+ * names is read exactly as a pointer parameter is read.
  */
 static bool is_access_expr_type(Expr *expr)
 {
@@ -2126,6 +2174,7 @@ static bool is_access_expr_type(Expr *expr)
 	case Stmt::ArraySubscriptExprClass:
 	case Stmt::DeclRefExprClass:
 	case Stmt::MemberExprClass:
+	case Stmt::CXXThisExprClass:
 		return true;
 	default:
 		return false;
@@ -2185,6 +2234,36 @@ int PetScan::set_inliner_arguments(pet_inliner &inliner, CallExpr *call,
 		if (!expr)
 			return -1;
 		inliner.add_array_arg(parm, expr, is_addr);
+	}
+
+	/* The object the method was called on is an argument as well, and
+	 * the one the body reaches its members through.  Binding it here
+	 * is what keeps the body talking about the caller's object rather
+	 * than about an object of its own: without it a write through
+	 * this would be a write to something nothing else can see.
+	 *
+	 * Written "p->m()" the object arrives as a pointer and stands for
+	 * this as it is; written "b.m()" it arrives as the object, and
+	 * this is its address.
+	 */
+	CXXMemberCallExpr *member_call = dyn_cast<CXXMemberCallExpr>(call);
+	CXXMethodDecl *method = dyn_cast<CXXMethodDecl>(fd);
+
+	if (member_call && method && !method->isStatic()) {
+		Expr *object = pet_clang_strip_casts(
+					member_call->getImplicitObjectArgument());
+		int is_addr = !object->getType()->isPointerType();
+		pet_expr *expr;
+
+		if (!is_access_expr_type(object)) {
+			report_unsupported_inline_function_argument(object);
+			return -1;
+		}
+		expr = extract_access_expr(object);
+		if (!expr)
+			return -1;
+		inliner.add_array_arg(implicit_object(ast_context, method),
+					expr, is_addr);
 	}
 
 	return 0;

@@ -1961,14 +1961,25 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 				isl_union_map_copy(vb), independent);
 			pet_scop *scop = ps.scan(body);
 			std::string where = body->getLocation().printToString(sm);
+			const std::string &said =
+				scop ? ps.first_stop : ps.last_stop;
 
+			/* A body a scop can read the whole of, and which
+			 * holds nothing a scop is about -- a cast to void
+			 * and a return of a constant -- gives no scop and
+			 * refuses nothing.  Saying so is not the same as
+			 * saying nothing: a line with no reason at all is
+			 * how a scan that gave up without a word used to
+			 * look, and telling the two apart is the whole use
+			 * of the column.
+			 */
 			fprintf(part[i], "%s\t%s\t%s\t%d\t%s\n",
 				body->getQualifiedNameAsString().c_str(),
 				where.c_str(), scop ? "scop" : "none",
 				scop ? scop->n_stmt : 0,
-				(scop ? ps.first_stop : ps.last_stop).empty() ?
-				"-" :
-				(scop ? ps.first_stop : ps.last_stop).c_str());
+				!said.empty() ? said.c_str() :
+				scop ? "-" :
+				"nothing in the body became a statement");
 			pet_scop_free(scop);
 		}
 		fflush(part[i]);
