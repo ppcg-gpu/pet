@@ -2,16 +2,23 @@ start: 149
 end: 217
 indent: "\t"
 context: '[n] -> {  : 4 <= n <= 2147483647 }'
-schedule: '{ domain: "[n] -> { S_0[]; S_1[] }", child: { sequence: [ { filter: "[n]
-  -> { S_0[] }" }, { filter: "[n] -> { S_1[] }" } ] } }'
+schedule: '{ domain: "[n] -> { S_4[i] : 0 <= i <= 3; S_0[]; S_3[]; S_1[]; S_2[] }",
+  child: { sequence: [ { filter: "[n] -> { S_0[] }" }, { filter: "[n] -> { S_1[] }"
+  }, { filter: "[n] -> { S_2[] }" }, { filter: "[n] -> { S_4[i] }", child: { schedule:
+  "[n] -> L_0[{ S_4[i] -> [(i)] }]" } }, { filter: "[n] -> { S_3[] }" } ] } }'
 arrays:
+- context: '{  :  }'
+  extent: '{ pos[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
 - context: '[n] -> {  : n >= 0 }'
   extent: '[n] -> { A[i0] : 0 <= i0 < n }'
   element_type: int
   element_size: 4
 statements:
 - line: 10
-  domain: '[n] -> { S_0[] }'
+  domain: '{ S_0[] }'
   body:
     type: expression
     expr:
@@ -23,25 +30,65 @@ statements:
         reference: __pet_ref_0
         read: 1
         write: 0
-- line: 11
+- line: -1
   domain: '[n] -> { S_1[] }'
   body:
     type: expression
     expr:
-      type: call
-      name: foo
+      type: op
+      operation: kill
       arguments:
       - type: access
-        index: '[n] -> { S_1[] -> [(-1)] }'
+        killed: '[n] -> { S_1[] -> pos[] }'
+        index: '[n] -> { S_1[] -> pos[] }'
         reference: __pet_ref_1
-        read: 1
-        write: 0
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_2[] }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
       - type: access
-        may_read: '[n] -> { S_1[] -> A[o0] : 0 <= o0 <= 3 }'
-        may_write: '[n] -> { S_1[] -> A[o0] : 0 <= o0 <= 3 }'
-        must_write: '[n] -> { S_1[] -> A[o0] : 0 <= o0 <= 3 }'
-        index: '[n] -> { S_1[] -> A[] }'
-        depth: 1
+        index: '[n] -> { S_2[] -> pos[] }'
         reference: __pet_ref_2
+        read: 0
+        write: 1
+      - type: op
+        operation: '-'
+        arguments:
+        - type: int
+          value: 1
+- line: 4
+  domain: '[n] -> { S_4[i] : 0 <= i <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: +=
+      arguments:
+      - type: access
+        index: '[n] -> { S_4[i] -> A[(i)] }'
+        reference: __pet_ref_3
         read: 1
         write: 1
+      - type: access
+        index: '[n] -> { S_4[i] -> [(i)] }'
+        reference: __pet_ref_4
+        read: 1
+        write: 0
+- line: -1
+  domain: '[n] -> { S_3[] }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_3[] -> pos[] }'
+        index: '[n] -> { S_3[] -> pos[] }'
+        reference: __pet_ref_5
+        kill: 1

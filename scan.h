@@ -110,6 +110,51 @@ struct PetTypes {
 	}
 };
 
+/* How far a body is put in place of a call to it.
+ *
+ * A cycle is caught for what it is; this is the second line, for a
+ * chain of calls that is merely long, and it is set where the chains of
+ * a real program do not reach.
+ */
+static const int max_inline_depth = 32;
+
+/* How many calls are put in place of at all, going over one function.
+ *
+ * A cycle is caught by the set and a long chain by the depth, and
+ * neither catches what is neither: a tree of calls that does not repeat
+ * and is not deep, but is wide at every level.  GGML_ASSERT alone
+ * reaches ggml_abort, which reaches the printing of a backtrace, which
+ * reaches the standard library, and thirty-two levels of that is a
+ * number of paths no machine finishes.  This is the count of how many
+ * were put in place, whatever their shape.
+ */
+static const int max_inlined_calls = 1000;
+
+/* What a walk over one function shares with every walk it starts.
+ *
+ * Going over a body starts a walk of its own -- for the summary of what
+ * it calls, and for the body put in place of a call -- and each of those
+ * starts more.  What holds them back has to be one thing held in common:
+ * a guard kept by one of the two ways down is not there when the other
+ * way is taken, and the counting begins again.  That is not a thought
+ * about how it might go wrong; it is what it did, going round eighteen
+ * thousand times with a depth of thirty-two in force, three bodies put
+ * in place for every summary asked after.
+ */
+struct pet_walk {
+	/* The functions whose summary is being worked out. */
+	std::set<clang::FunctionDecl *> in_summary;
+	/* The functions whose body is being put in place of a call. */
+	std::set<clang::FunctionDecl *> inlining;
+	/* How far down each of the two goes right now. */
+	int summary_depth;
+	int inline_depth;
+	/* How many bodies have been put in place at all. */
+	int inlined_calls;
+
+	pet_walk() : summary_depth(0), inline_depth(0), inlined_calls(0) {}
+};
+
 struct PetScan {
 	clang::Preprocessor &PP;
 	clang::ASTContext &ast_context;
@@ -198,8 +243,12 @@ struct PetScan {
 	 * one cache enough, since each of these goes over the body with a
 	 * scan of its own; the set is shared down the whole nest instead.
 	 */
-	std::set<clang::FunctionDecl *> *in_summary;
-	int summary_depth;
+	/* What this walk shares with the walks it starts.  Every scan has
+	 * one of its own to begin with, and every scan it starts is given
+	 * the same one.
+	 */
+	pet_walk own_walk;
+	pet_walk *walk;
 
 	/* Where the first place a scop stopped was, and what stopped it.
 	 *
@@ -210,6 +259,57 @@ struct PetScan {
 	 * over after the scop had already ended.
 	 */
 	std::string first_stop;
+
+	/* And the last of them.
+	 *
+	 * Where a scop came out, the first place it stopped is its
+	 * border and the rest is what lies beyond.  Where none came out
+	 * there is no border, and the first place says only what was met
+	 * first -- which, once a body is put in place of a call, is
+	 * something about that body rather than about the function being
+	 * asked after.  The last is the one the scan gave up nearest to.
+	 */
+	std::string last_stop;
+
+	/* The functions whose bodies are being put in place of a call to
+	 * them right now, and how many of them there are.
+	 *
+	 * Putting a body in place of a call means going over that body,
+	 * and going over a body means meeting the calls it makes.  Two
+	 * functions that call each other would be put inside each other
+	 * for as long as there is stack, and one that calls itself would
+	 * not even need a second.  As with a summary, each body is gone
+	 * over by a scan of its own, so the set is shared down the nest
+	 * rather than kept by any one of them.
+	 */
+	/* Is the body of "fd" one to leave where it is?
+	 *
+	 * A body already being put in place would be put inside itself;
+	 * one deeper than bodies are followed, or one past the point
+	 * where enough of them have been put in place, is where this
+	 * stops of its own accord.  Why is said, once, so that a scop
+	 * that did not grow says what stopped it growing.
+	 */
+	bool already_inlining(clang::FunctionDecl *fd) {
+		const char *why = NULL;
+
+		if (fd->isNoReturn())
+			why = "it does not return";
+		else if (walk->inline_depth >= max_inline_depth)
+			why = "bodies are not followed that deep";
+		else if (walk->inlined_calls >= max_inlined_calls)
+			why = "enough bodies have been put in place already";
+		else if (walk->inlining.find(fd) != walk->inlining.end())
+			why = "it is already being put in place";
+		else
+			return false;
+
+		if (first_stop.empty())
+			first_stop = "the body of " + fd->getNameAsString() +
+					" was left where it is: " + why;
+
+		return true;
+	}
 
 	PetScan(clang::Preprocessor &PP, clang::ASTContext &ast_context,
 		clang::DeclContext *decl_context, ScopLoc &loc,
@@ -223,7 +323,7 @@ struct PetScan {
 		value_bounds(value_bounds), last_line(0), current_line(0),
 		independent(independent), n_rename(0),
 		declared_names_collected(false), call2id(NULL),
-		n_arg(0), n_ret(0), in_summary(NULL), summary_depth(0) {
+		n_arg(0), n_ret(0), walk(&own_walk) {
 		id_size = isl_id_to_pet_expr_alloc(ctx, 0);
 	}
 
@@ -356,7 +456,9 @@ private:
 
 	clang::FunctionDecl *find_decl_from_name(clang::CallExpr *call,
 		std::string name);
+public:
 	clang::FunctionDecl *get_summary_function(clang::CallExpr *call);
+private:
 
 	void report(clang::SourceRange range, unsigned id);
 	void report(clang::Stmt *stmt, unsigned id);

@@ -2,16 +2,27 @@ start: 298
 end: 380
 indent: "\t"
 context: '{  :  }'
-schedule: '{ domain: "{ S_3[i] : 0 <= i <= 9; S_5[i] : 0 <= i <= 9; S_0[]; S_6[i]
-  : 0 <= i <= 9; S_8[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19; S_2[i] : 0 <= i <=
-  9; S_7[i] : 0 <= i <= 9; S_4[i] : 0 <= i <= 9; S_1[] }", child: { sequence: [ {
-  filter: "{ S_0[] }" }, { filter: "{ S_1[] }" }, { filter: "{ S_3[i]; S_5[i]; S_6[i];
-  S_8[i, i'']; S_2[i]; S_7[i]; S_4[i] }", child: { schedule: "L_0[{ S_8[i, i''] ->
-  [(i)]; S_6[i] -> [(i)]; S_3[i] -> [(i)]; S_4[i] -> [(i)]; S_5[i] -> [(i)]; S_2[i]
-  -> [(i)]; S_7[i] -> [(i)] }]", child: { sequence: [ { filter: "{ S_2[i] }" }, {
-  filter: "{ S_3[i] }" }, { filter: "{ S_5[i] }" }, { filter: "{ S_6[i] }" }, { filter:
-  "{ S_8[i, i''] }", child: { schedule: "L_1[{ S_8[i, i''] -> [(i'')] }]" } }, { filter:
-  "{ S_7[i] }" }, { filter: "{ S_4[i] }" } ] } } } ] } }'
+schedule: '{ domain: "{ S_4[i] : 0 <= i <= 9; S_10[i, i''] : 0 <= i <= 9 and 0 <=
+  i'' <= 19; S_6[i] : 0 <= i <= 9; S_8[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19; S_11[i,
+  i'', i'''', j] : 0 <= i <= 9 and 0 <= i'' <= 19 and 0 <= i'''' <= 9 and 0 <= j <=
+  9; S_2[i] : 0 <= i <= 9; S_0[]; S_7[i] : 0 <= i <= 9; S_1[]; S_3[i] : 0 <= i <=
+  9; S_5[i] : 0 <= i <= 9; S_9[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19; S_12[i, i'']
+  : 0 <= i <= 9 and 0 <= i'' <= 19 }", child: { sequence: [ { filter: "{ S_0[] }"
+  }, { filter: "{ S_1[] }" }, { filter: "{ S_4[i]; S_10[i, i'']; S_6[i]; S_11[i, i'',
+  i'''', j]; S_8[i, i'']; S_2[i]; S_7[i]; S_3[i]; S_5[i]; S_12[i, i'']; S_9[i, i'']
+  }", child: { schedule: "L_0[{ S_11[i, i'', i'''', j] -> [(i)]; S_3[i] -> [(i)];
+  S_7[i] -> [(i)]; S_12[i, i''] -> [(i)]; S_5[i] -> [(i)]; S_2[i] -> [(i)]; S_9[i,
+  i''] -> [(i)]; S_4[i] -> [(i)]; S_6[i] -> [(i)]; S_10[i, i''] -> [(i)]; S_8[i, i'']
+  -> [(i)] }]", child: { sequence: [ { filter: "{ S_2[i] }" }, { filter: "{ S_3[i]
+  }" }, { filter: "{ S_5[i] }" }, { filter: "{ S_6[i] }" }, { filter: "{ S_10[i, i''];
+  S_11[i, i'', i'''', j]; S_8[i, i'']; S_9[i, i'']; S_12[i, i''] }", child: { schedule:
+  "L_1[{ S_10[i, i''] -> [(i'')]; S_9[i, i''] -> [(i'')]; S_11[i, i'', i'''', j] ->
+  [(i'')]; S_8[i, i''] -> [(i'')]; S_12[i, i''] -> [(i'')] }]", child: { sequence:
+  [ { filter: "{ S_8[i, i''] }" }, { filter: "{ S_9[i, i''] }" }, { filter: "{ S_11[i,
+  i'', i'''', j] }", child: { schedule: "L_2[{ S_11[i, i'', i'''', j] -> [(i'''')]
+  }]", child: { schedule: "L_3[{ S_11[i, i'', i'''', j] -> [(j)] }]" } } }, { filter:
+  "{ S_12[i, i''] }" }, { filter: "{ S_10[i, i''] }" } ] } } }, { filter: "{ S_7[i]
+  }" }, { filter: "{ S_4[i] }" } ] } } } ] } }'
 types:
 - name: s
   definition: "struct s {\n    int a[30][40];\n    int b[50];\n}"
@@ -29,6 +40,11 @@ arrays:
   declared: 1
 - context: '{  :  }'
   extent: '{ a_0[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ __pet_arg_0[] }'
   element_type: int
   element_size: 4
   declared: 1
@@ -136,26 +152,85 @@ statements:
         write: 1
       - type: int
         value: 0
-- line: 18
+- line: -1
   domain: '{ S_8[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19 }'
   body:
     type: expression
     expr:
-      type: call
-      name: g
+      type: op
+      operation: kill
       arguments:
-      - type: op
-        operation: '&'
-        arguments:
-        - type: access
-          may_write: '{ S_8[i, i''] -> s_a[s[i, i''] -> a[o2, o3]] : 10 <= o2 <= 19
-            and 20 <= o3 <= 29; S_8[i, i''] -> s_b[s[i, i''] -> b[5]] }'
-          must_write: '{ S_8[i, i''] -> s_a[s[i, i''] -> a[o2, o3]] : 10 <= o2 <=
-            19 and 20 <= o3 <= 29; S_8[i, i''] -> s_b[s[i, i''] -> b[5]] }'
-          index: '{ S_8[i, i''] -> s[(i), (i'')] }'
-          reference: __pet_ref_7
-          read: 0
-          write: 1
+      - type: access
+        killed: '{ S_8[i, i''] -> __pet_arg_0[] }'
+        index: '{ S_8[i, i''] -> __pet_arg_0[] }'
+        reference: __pet_ref_7
+        kill: 1
+- line: -1
+  domain: '{ S_9[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_9[i, i''] -> __pet_arg_0[] }'
+        reference: __pet_ref_8
+        read: 0
+        write: 1
+      - type: access
+        index: '{ S_9[i, i''] -> [(i'')] }'
+        reference: __pet_ref_9
+        read: 1
+        write: 0
+- line: 10
+  domain: '{ S_11[i, i'', i'''', j] : 0 <= i <= 9 and 0 <= i'' <= 19 and 0 <= i''''
+    <= 9 and 0 <= j <= 9 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_11[i, i'', i'''', j] -> s_a[s[(i''), (i'')] -> a[(10 + i''''),
+          (20 + j)]] }'
+        reference: __pet_ref_10
+        read: 0
+        write: 1
+      - type: access
+        index: '{ S_11[i, i'', i'''', j] -> [(i'''' + j)] }'
+        reference: __pet_ref_11
+        read: 1
+        write: 0
+- line: 11
+  domain: '{ S_12[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '{ S_12[i, i''] -> s_b[s[(i''), (i'')] -> b[(5)]] }'
+        reference: __pet_ref_12
+        read: 0
+        write: 1
+      - type: int
+        value: 1
+- line: -1
+  domain: '{ S_10[i, i''] : 0 <= i <= 9 and 0 <= i'' <= 19 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '{ S_10[i, i''] -> __pet_arg_0[] }'
+        index: '{ S_10[i, i''] -> __pet_arg_0[] }'
+        reference: __pet_ref_13
+        kill: 1
 - line: 16
   domain: '{ S_7[i] : 0 <= i <= 9 }'
   body:
@@ -167,7 +242,7 @@ statements:
       - type: access
         killed: '{ S_7[i] -> a_0[] }'
         index: '{ S_7[i] -> a_0[] }'
-        reference: __pet_ref_8
+        reference: __pet_ref_14
         kill: 1
 - line: -1
   domain: '{ S_4[i] : 0 <= i <= 9 }'
@@ -180,5 +255,5 @@ statements:
       - type: access
         killed: '{ S_4[i] -> __pet_arg_0[] }'
         index: '{ S_4[i] -> __pet_arg_0[] }'
-        reference: __pet_ref_9
+        reference: __pet_ref_15
         kill: 1

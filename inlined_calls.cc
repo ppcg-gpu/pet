@@ -57,18 +57,57 @@ pet_inlined_calls::~pet_inlined_calls()
 /* This method is called for each call expression "call"
  * in an expression statement.
  *
- * If the corresponding function body is marked "inline", then add
- * it to this->calls.
+ * If the body of what is called can be reached, then add it to
+ * this->calls.
  *
- * Return true to continue the traversal.
+ * What is asked is whether the body is there, not whether the word
+ * "inline" was written in front of it.  The word says what the author
+ * meant the compiler to do about the cost of a call and says nothing
+ * about what the call does, and a program written across many files
+ * hardly ever says it: reading a linked AST, every body is there, and
+ * a scop that stops at every call is a scop of one function.
+ *
+ * A function whose body is already being put in place is left alone --
+ * see PetScan::already_inlining -- since putting it inside itself is
+ * something that ends only when the stack does.
  */
 bool pet_inlined_calls::VisitCallExpr(clang::CallExpr *call)
 {
-	FunctionDecl *fd = call->getDirectCallee();
+	FunctionDecl *named = call->getDirectCallee();
+	FunctionDecl *fd = pet_clang_find_function_decl_with_body(named);
 
-	fd = pet_clang_find_function_decl_with_body(fd);
+	/* A function whose accesses were written down separately is one
+	 * whose body was written down not to be looked at: that is what
+	 * saying pencil_access(f) about it means.  Putting the body in
+	 * place of the call reads what the author said to read instead
+	 * of, and what it says is usually something a scop cannot hold,
+	 * which is why anyone writes the annotation.
+	 */
+	if (named && scan->get_summary_function(call) != named)
+		return true;
 
-	if (fd && fd->isInlineSpecified())
+	/* What a call was found to name, and whether a body came with it.
+	 * Asked about one name through PET_CALL_TRACE, since a link of an
+	 * engine makes millions of these.
+	 */
+	if (const char *want = getenv("PET_CALL_TRACE")) {
+		std::string name = named ?
+			named->getNameAsString() : std::string("<no name>");
+
+		if (name.find(want) != std::string::npos) {
+			int n = 0;
+
+			if (named)
+				n = std::distance(named->redecls_begin(),
+						named->redecls_end());
+			fprintf(stderr, "a call names %s, %s, a chain of %d, "
+				"and a body %s\n", name.c_str(),
+				named ? ((Decl *) named)->getDeclKindName() : "nothing",
+				n, fd ? "was found" : "was not found");
+		}
+	}
+
+	if (fd && !scan->already_inlining(fd))
 		calls.push_back(call);
 
 	return true;
@@ -96,9 +135,31 @@ void pet_inlined_calls::add(CallExpr *call)
 		call2id[call] = isl_id_copy(id);
 	}
 	scan->call2id = &this->call2id;
-	inlined.push_back(scan->extract_inlined_call(call, fd, id));
+	pet_tree *tree = scan->extract_inlined_call(call, fd, id);
 	scan->call2id = NULL;
 	isl_id_free(id);
+
+	/* Nothing came back, so nothing is put in place of the call and
+	 * the call stays what it was: one statement that asks nothing of
+	 * what it calls.  The variable that was going to hold what it
+	 * returns goes with it, or the call would be replaced by a read
+	 * of something never written.
+	 */
+	if (!tree) {
+		if (getenv("PET_INLINE_TRACE"))
+			fprintf(stderr, "the call to %s stays a call\n",
+				fd->getNameAsString().c_str());
+		std::map<Stmt *, isl_id *>::iterator it = call2id.find(call);
+
+		if (it != call2id.end()) {
+			isl_id_free(it->second);
+			call2id.erase(it);
+		}
+		return;
+	}
+
+	inlined.push_back(tree);
+	done.insert(call);
 }
 
 /* Collect all the call expressions in "stmt" that need to be inlined,

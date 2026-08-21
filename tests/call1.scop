@@ -1,18 +1,29 @@
 start: 141
 end: 245
 indent: "\t"
-context: '[n] -> {  : 4*floor((n)/4) = n and 0 <= n <= 2147483647 }'
-schedule: '{ domain: "[n] -> { S_0[]; S_1[i] : 4*floor((i)/4) = i and 0 <= i <= -4
-  + n }", child: { sequence: [ { filter: "[n] -> { S_0[] }" }, { filter: "[n] -> {
-  S_1[i] }", child: { schedule: "[n] -> L_0[{ S_1[i] -> [(i)] }]" } } ] } }'
+context: '[n] -> {  : (n) mod 4 = 0 and 0 <= n <= 2147483647 }'
+schedule: '{ domain: "[n] -> { S_1[i] : (i) mod 4 = 0 and 0 <= i <= -4 + n; S_2[i]
+  : (i) mod 4 = 0 and 0 <= i <= -4 + n; S_0[]; S_4[i, i''] : (i) mod 4 = 0 and 0 <=
+  i <= -4 + n and 0 <= i'' <= 3; S_3[i] : (i) mod 4 = 0 and 0 <= i <= -4 + n }", child:
+  { sequence: [ { filter: "[n] -> { S_0[] }" }, { filter: "[n] -> { S_1[i]; S_2[i];
+  S_4[i, i'']; S_3[i] }", child: { schedule: "[n] -> L_0[{ S_1[i] -> [(i)]; S_2[i]
+  -> [(i)]; S_4[i, i''] -> [(i)]; S_3[i] -> [(i)] }]", child: { sequence: [ { filter:
+  "[n] -> { S_1[i] }" }, { filter: "[n] -> { S_2[i] }" }, { filter: "[n] -> { S_4[i,
+  i''] }", child: { schedule: "[n] -> L_1[{ S_4[i, i''] -> [(i'')] }]" } }, { filter:
+  "[n] -> { S_3[i] }" } ] } } } ] } }'
 arrays:
+- context: '{  :  }'
+  extent: '{ pos[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
 - context: '[n] -> {  : n >= 0 }'
   extent: '[n] -> { A[i0] : 0 <= i0 < n }'
   element_type: int
   element_size: 4
 statements:
 - line: 10
-  domain: '[n] -> { S_0[] }'
+  domain: '{ S_0[] }'
   body:
     type: expression
     expr:
@@ -24,25 +35,66 @@ statements:
         reference: __pet_ref_0
         read: 1
         write: 0
-- line: 12
-  domain: '[n] -> { S_1[i] : 4*floor((i)/4) = i and 0 <= i <= -4 + n }'
+- line: -1
+  domain: '[n] -> { S_1[i] : (i) mod 4 = 0 and 0 <= i <= -4 + n }'
   body:
     type: expression
     expr:
-      type: call
-      name: foo
+      type: op
+      operation: kill
       arguments:
       - type: access
-        index: '[n] -> { S_1[i] -> [(i)] }'
+        killed: '[n] -> { S_1[i] -> pos[] }'
+        index: '[n] -> { S_1[i] -> pos[] }'
         reference: __pet_ref_1
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_2[i] : (i) mod 4 = 0 and 0 <= i <= -4 + n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_2[i] -> pos[] }'
+        reference: __pet_ref_2
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_2[i] -> [(i)] }'
+        reference: __pet_ref_3
         read: 1
         write: 0
+- line: 4
+  domain: '[n] -> { S_4[i, i''] : (i) mod 4 = 0 and 0 <= i <= -4 + n and 0 <= i''
+    <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: +=
+      arguments:
       - type: access
-        may_read: '[n] -> { S_1[i] -> A[o0] : i <= o0 <= 3 + i }'
-        may_write: '[n] -> { S_1[i] -> A[o0] : i <= o0 <= 3 + i }'
-        must_write: '[n] -> { S_1[i] -> A[o0] : i <= o0 <= 3 + i }'
-        index: '[n] -> { S_1[i] -> A[] }'
-        depth: 1
-        reference: __pet_ref_2
+        index: '[n] -> { S_4[i, i''] -> A[(i + i'')] }'
+        reference: __pet_ref_4
         read: 1
         write: 1
+      - type: access
+        index: '[n] -> { S_4[i, i''] -> [(i'')] }'
+        reference: __pet_ref_5
+        read: 1
+        write: 0
+- line: -1
+  domain: '[n] -> { S_3[i] : (i) mod 4 = 0 and 0 <= i <= -4 + n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_3[i] -> pos[] }'
+        index: '[n] -> { S_3[i] -> pos[] }'
+        reference: __pet_ref_6
+        kill: 1

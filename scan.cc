@@ -255,6 +255,7 @@ void PetScan::report(SourceRange range, unsigned id)
 		 */
 		if (first_stop.empty())
 			first_stop = where + ": " + why.str();
+		last_stop = where + ": " + why.str();
 
 		if (getenv("PET_SCOP_TRACE"))
 			fprintf(stderr, "a scop stops at %s: %s\n",
@@ -2054,7 +2055,6 @@ int PetScan::substitute_array_sizes(__isl_keep pet_tree *tree,
 __isl_give pet_tree *PetScan::extract_inlined_call(CallExpr *call,
 	FunctionDecl *fd, __isl_keep isl_id *return_id)
 {
-	int save_autodetect;
 	pet_tree *tree;
 	pet_loc *tree_loc;
 	pet_inliner inliner(ctx, n_arg, ast_context);
@@ -2062,17 +2062,69 @@ __isl_give pet_tree *PetScan::extract_inlined_call(CallExpr *call,
 	if (set_inliner_arguments(inliner, call, fd) < 0)
 		return NULL;
 
-	save_autodetect = options->autodetect;
-	options->autodetect = 0;
+	walk->inlining.insert(fd);
+	++walk->inline_depth;
+	++walk->inlined_calls;
+
+	/* Going over one function can put a thousand bodies in place, and
+	 * watching a file that does not grow is no way to learn that.
+	 */
+	if (walk->inlined_calls % 1000 == 0)
+		fprintf(stderr, "put %d bodies in place so far\n",
+			walk->inlined_calls);
+
 	PetScan body_scan(PP, ast_context, fd, loc, options,
 				isl_union_map_copy(value_bounds), independent);
+	body_scan.walk = walk;
 	collect_declared_names();
 	body_scan.add_new_used_names(declared_names);
 	body_scan.add_new_used_names(used_names);
 	body_scan.return_root = fd->getBody();
 	tree = body_scan.extract(fd->getBody(), false);
 	add_new_used_names(body_scan.used_names);
-	options->autodetect = save_autodetect;
+
+	--walk->inline_depth;
+	walk->inlining.erase(fd);
+
+	/* A body that did not come over whole is not put in place of the
+	 * call.  Standing where it is, the call is one statement of a
+	 * scop and asks nothing of what it calls; put in place of it, a
+	 * body that a scop cannot hold takes the call's own statement
+	 * down with it, and a function that had a scop before has none.
+	 * A union widens, and this has to widen too.
+	 *
+	 * Why it did not come over is said here, since it is the reason
+	 * the scop stopped growing and there is nowhere else it would be
+	 * said: what the body's own scan found is about the body.
+	 */
+	if (getenv("PET_INLINE_TRACE"))
+		fprintf(stderr, "the body of %s came back %s, the scan calls "
+			"it %s, %zu still being put in place, and the caller "
+			"is %s\n", fd->getNameAsString().c_str(),
+			tree ? "as a tree" : "as nothing",
+			body_scan.partial ? "partial" : "whole",
+			walk->inlining.size(),
+			partial ? "partial" : "whole");
+
+	if (body_scan.partial || !tree) {
+		std::string why = body_scan.first_stop.empty() ?
+			std::string("nothing said why") :
+			body_scan.first_stop;
+
+		std::string said = "the body of " + fd->getNameAsString() +
+					" did not come over whole: " + why;
+
+		/* Both, because this is where the scop stopped growing and
+		 * also the last thing that happened to it: a function whose
+		 * scop came out wants the first, and one whose scop did not
+		 * wants the last, and this is each of them.
+		 */
+		if (first_stop.empty())
+			first_stop = said;
+		last_stop = said;
+		pet_tree_free(tree);
+		return NULL;
+	}
 
 	tree_loc = construct_pet_loc(call->getSourceRange(), true);
 	tree = pet_tree_set_loc(tree, tree_loc);
@@ -2101,7 +2153,16 @@ __isl_give pet_tree *PetScan::extract_expr_stmt(Stmt *stmt)
 	pet_inlined_calls ic(this);
 
 	ic.collect(stmt);
-	if (ic.calls.size() >= 1 && ic.calls[0] == stmt) {
+	/* A statement that is nothing but a call to a function whose body
+	 * was put in place needs nothing extracted for it: the body is
+	 * among what will be put around it.  A call whose body did not
+	 * come over is still a call, and extracting nothing for it would
+	 * leave the statement out of the scop altogether -- which is how
+	 * a function calling one that a scop cannot hold came to hold
+	 * nothing at all, rather than the call it used to hold.
+	 */
+	if (ic.calls.size() >= 1 && ic.calls[0] == stmt &&
+	    ic.done.count(stmt)) {
 		tree = pet_tree_new_block(ctx, 0, 0);
 	} else {
 		call2id = &ic.call2id;
@@ -2551,38 +2612,37 @@ __isl_give pet_function_summary *PetScan::get_summary(FunctionDecl *fd)
 	 * sixteen thousand times before the stack ran out, whatever the
 	 * stack was set to.
 	 */
-	std::set<FunctionDecl *> mine;
-	std::set<FunctionDecl *> *active = in_summary ? in_summary : &mine;
-
-	if (active->find(fd) != active->end() ||
-	    summary_depth >= max_summary_depth) {
+	if (walk->in_summary.find(fd) != walk->in_summary.end() ||
+	    walk->summary_depth >= max_summary_depth) {
 		if (getenv("PET_SCOP_TRACE")) {
 			fprintf(stderr, "no summary for %s: it is %s\n",
 				fd->getNameAsString().c_str(),
-				active->find(fd) != active->end() ?
+				walk->in_summary.find(fd) !=
+					walk->in_summary.end() ?
 					"already being worked out" :
 					"deeper than summaries are followed");
-			for (FunctionDecl *on : *active)
+			for (FunctionDecl *on : walk->in_summary)
 				fprintf(stderr, "  by way of %s\n",
 					on->getNameAsString().c_str());
 		}
 		return pet_function_summary_copy(no_summary);
 	}
 
-	active->insert(fd);
+	walk->in_summary.insert(fd);
+	++walk->summary_depth;
 
 	save_autodetect = options->autodetect;
 	options->autodetect = 1;
 	PetScan body_scan(PP, ast_context, fd, loc, options,
 				isl_union_map_copy(value_bounds), independent);
 
-	body_scan.in_summary = active;
-	body_scan.summary_depth = summary_depth + 1;
+	body_scan.walk = walk;
 	body_scan.return_root = fd->getBody();
 	tree = body_scan.extract(fd->getBody(), false);
 	options->autodetect = save_autodetect;
 
-	active->erase(fd);
+	--walk->summary_depth;
+	walk->in_summary.erase(fd);
 
 	if (body_scan.partial) {
 		pet_tree_free(tree);

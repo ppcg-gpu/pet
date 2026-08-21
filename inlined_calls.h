@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <map>
+#include <set>
 
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
@@ -25,6 +26,11 @@ struct pet_inlined_calls : clang::RecursiveASTVisitor<pet_inlined_calls> {
 	std::vector<clang::Stmt *> calls;
 	std::vector<pet_tree *> inlined;
 	std::map<clang::Stmt *, isl_id *> call2id;
+	/* The calls whose bodies were put in place.  A call that was
+	 * collected is not the same as one that came over: a body the
+	 * scop cannot hold leaves the call where it was.
+	 */
+	std::set<clang::Stmt *> done;
 	PetScan *scan;
 
 	pet_inlined_calls(PetScan *scan) : scan(scan) {}

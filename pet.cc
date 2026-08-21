@@ -1904,7 +1904,8 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 			body->getQualifiedNameAsString().c_str(),
 			where.c_str(), scop ? "scop" : "none",
 			scop ? scop->n_stmt : 0,
-			ps.first_stop.empty() ? "-" : ps.first_stop.c_str());
+			(scop ? ps.first_stop : ps.last_stop).empty() ? "-" :
+			(scop ? ps.first_stop : ps.last_stop).c_str());
 		pet_scop_free(scop);
 
 		/* Going over a hundred thousand functions takes long
