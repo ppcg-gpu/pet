@@ -555,13 +555,17 @@ endfunction()
 #--------------------------------------------------------------------
 
 # Find standard PET tests with absolute paths
-file(GLOB PET_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c")
+file(GLOB PET_TEST_FILES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c"
+     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
 foreach(test_file ${PET_TEST_FILES})
     add_pet_test(${test_file} "" "standard")
 endforeach()
 
 # Find autodetect tests with absolute paths
-file(GLOB PET_AUTODETECT_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/autodetect/*.c")
+file(GLOB PET_AUTODETECT_TEST_FILES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/tests/autodetect/*.c"
+     "${CMAKE_CURRENT_SOURCE_DIR}/tests/autodetect/*.cpp")
 foreach(test_file ${PET_AUTODETECT_TEST_FILES})
     add_pet_test(${test_file} "--autodetect" "autodetect")
 endforeach()

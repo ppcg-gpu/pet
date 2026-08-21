@@ -680,6 +680,14 @@ __isl_give pet_expr *PetScan::extract_index_expr(ValueDecl *decl)
  * If "expr" is a reference to an enum constant, then return
  * an integer expression instead, representing the value of the enum constant.
  */
+/* Extract an index expression from "expr".
+ *
+ * Parentheses and the wrapper clang puts around an expression whose
+ * value it has worked out are not things in themselves: what is written
+ * inside them is what is being subscripted or reached into, and the
+ * wrapper only says something about how it was read.  A base written
+ * with brackets around it used to end the scop for that reason alone.
+ */
 __isl_give pet_expr *PetScan::extract_index_expr(Expr *expr)
 {
 	switch (expr->getStmtClass()) {
@@ -693,6 +701,11 @@ __isl_give pet_expr *PetScan::extract_index_expr(Expr *expr)
 		return extract_expr(cast<IntegerLiteral>(expr));
 	case Stmt::MemberExprClass:
 		return extract_index_expr(cast<MemberExpr>(expr));
+	case Stmt::ParenExprClass:
+		return extract_index_expr(cast<ParenExpr>(expr)->getSubExpr());
+	case Stmt::ConstantExprClass:
+		return extract_index_expr(
+			cast<ConstantExpr>(expr)->getSubExpr());
 	default:
 		unsupported(expr);
 	}
@@ -1266,6 +1279,23 @@ __isl_give pet_expr *PetScan::extract_expr(Expr *expr)
 		return extract_expr(cast<FloatingLiteral>(expr));
 	case Stmt::ParenExprClass:
 		return extract_expr(cast<ParenExpr>(expr));
+	case Stmt::ConstantExprClass:
+		return extract_expr(cast<ConstantExpr>(expr)->getSubExpr());
+	case Stmt::TypeTraitExprClass: {
+		TypeTraitExpr *tt = cast<TypeTraitExpr>(expr);
+
+		/* A trait that answers with something other than yes or no
+		 * is not a value a scop can hold, and says so.
+		 */
+		if (!tt->isValueDependent() && tt->isStoredAsBoolean())
+			return pet_expr_new_int(isl_val_int_from_si(ctx,
+						tt->getBoolValue() ? 1 : 0));
+		unsupported(expr);
+		return NULL;
+	}
+	case Stmt::CXXBoolLiteralExprClass:
+		return pet_expr_new_int(isl_val_int_from_si(ctx,
+			cast<CXXBoolLiteralExpr>(expr)->getValue() ? 1 : 0));
 	case Stmt::ConditionalOperatorClass:
 		return extract_expr(cast<ConditionalOperator>(expr));
 	case Stmt::CallExprClass:
