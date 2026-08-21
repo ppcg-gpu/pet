@@ -1326,6 +1326,8 @@ __isl_give pet_expr *PetScan::extract_expr(Expr *expr)
 	case Stmt::ConditionalOperatorClass:
 		return extract_expr(cast<ConditionalOperator>(expr));
 	case Stmt::CallExprClass:
+	case Stmt::CXXMemberCallExprClass:
+	case Stmt::CXXOperatorCallExprClass:
 		return extract_expr(cast<CallExpr>(expr));
 	case Stmt::CStyleCastExprClass:
 		return extract_expr(cast<CStyleCastExpr>(expr));
