@@ -1853,6 +1853,44 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	std::vector<FunctionDecl *> entries =
 		entries_of(ast_context.getTranslationUnitDecl(), NULL);
 
+	/* How many declarations of the link stand apart from a body that
+	 * the link holds under the same name.
+	 *
+	 * A declaration in one unit and a definition in another are meant
+	 * to become one entity, and where they do not, a call reaches a
+	 * declaration with no body and asks nothing of what it calls.
+	 * One of those is a defect; a hundred of them is the shape of the
+	 * whole map.
+	 */
+	std::set<std::string> with_body;
+	for (FunctionDecl *fd : entries)
+		with_body.insert(fd->getQualifiedNameAsString());
+
+	size_t apart = 0;
+	std::set<std::string> apart_names;
+	for (Decl *d : ast_context.getTranslationUnitDecl()->decls()) {
+		auto *ls = dyn_cast<LinkageSpecDecl>(d);
+
+		for (Decl *inner : ls ? ls->decls() :
+				DeclContext::decl_range(DeclContext::decl_iterator(),
+							DeclContext::decl_iterator())) {
+			auto *fd = dyn_cast<FunctionDecl>(inner);
+			const FunctionDecl *def;
+
+			if (!fd || fd->hasBody(def))
+				continue;
+			if (with_body.count(fd->getQualifiedNameAsString())) {
+				++apart;
+				apart_names.insert(
+					fd->getQualifiedNameAsString());
+			}
+		}
+	}
+	fprintf(stderr, "%zu declaration(s) of %zu name(s) stand apart "
+		"from a body the link holds\n", apart, apart_names.size());
+	for (const std::string &n : apart_names)
+		fprintf(stderr, "  apart: %s\n", n.c_str());
+
 	size_t done = 0;
 
 	for (FunctionDecl *body : entries) {

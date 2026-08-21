@@ -1,5 +1,6 @@
 #include <iterator>
 #include <memory>
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
@@ -256,6 +257,10 @@ static std::unique_ptr<ASTUnit> read_unit(struct pet_linked_ast *linked,
 
 #endif
 
+/* Put "d" where a C entity belongs in a unit read as C++; see below.
+ */
+static void give_c_linkage(struct pet_linked_ast *linked, Decl *d);
+
 /* An importer that links rather than merges.
  *
  * The importer clang provides is built for putting two translation
@@ -291,7 +296,13 @@ struct link_importer : public ASTImporter {
 			unsigned unit, std::vector<Decl *> &imported)
 		: ASTImporter(ToContext, ToFileManager, FromContext,
 				FromFileManager, MinimalImport, SharedState),
-		  shared_state(SharedState), unit(unit), imported(imported) {}
+		  shared_state(SharedState), unit(unit), imported(imported),
+		  linked(NULL) {}
+
+	/* The link this importer is filling in, so that a declaration can
+	 * be put where it belongs the moment it arrives.
+	 */
+	struct pet_linked_ast *linked;
 
 	/* The table the importer looks names up in, kept here because the
 	 * importer's own copy of it cannot be reached from outside.
@@ -1626,16 +1637,38 @@ static void give_c_linkage(struct pet_linked_ast *linked, Decl *d)
 	TranslationUnitDecl *tu =
 		linked->units[0]->getASTContext().getTranslationUnitDecl();
 
-	if (!isa<FunctionDecl>(d) && !isa<VarDecl>(d))
+	const char *want = getenv("PET_DECL_TRACE");
+	auto *nd = dyn_cast<NamedDecl>(d);
+	bool watched = want && nd &&
+		nd->getNameAsString().find(want) != std::string::npos;
+
+	if (!isa<FunctionDecl>(d) && !isa<VarDecl>(d)) {
+		if (watched)
+			fprintf(stderr, "  not given C linkage: it is a %s\n",
+				d->getDeclKindName());
 		return;
-	if (d->getDeclContext() != tu || d->getLexicalDeclContext() != tu)
+	}
+	if (d->getDeclContext() != tu || d->getLexicalDeclContext() != tu) {
+		if (watched)
+			fprintf(stderr, "  not given C linkage: it lives in a "
+				"%s\n",
+				cast<Decl>(d->getDeclContext())
+					->getDeclKindName());
 		return;
+	}
 	/* And only what is in the unit's list of declarations.  A
 	 * declaration the target already had is one the target placed,
 	 * and taking something for it does not put it anywhere new.
 	 */
-	if (!tu->containsDecl(d))
+	if (!tu->containsDecl(d)) {
+		if (watched)
+			fprintf(stderr, "  not given C linkage: the unit does "
+				"not list it\n");
 		return;
+	}
+
+	if (watched)
+		fprintf(stderr, "  given C linkage\n");
 
 	LinkageSpecDecl *ls = c_linkage(linked);
 
@@ -1728,17 +1761,78 @@ static void offer_bodies(struct pet_linked_ast *linked,
 	}
 }
 
+/* Say in the unit itself that what it holds is written in C.
+ *
+ * A unit read as C and linked into one read as C++ has to end up in a
+ * linkage specification, or a call in one unit and the definition in
+ * another are weighed against each other with different linkage and do
+ * not match.  Saying it here, in the unit, before anything of it is
+ * imported, leaves the rest to the importer: it copies a linkage
+ * specification as a linkage specification and puts what is inside it
+ * inside the copy, so every declaration is in the right place the
+ * moment it is made, which is before anything is weighed against it.
+ *
+ * Only what stands at the outermost level and carries a name into an
+ * object file is moved, which is what a linkage specification is for.
+ * The declarations are collected before any is moved, since moving one
+ * is a change to the list the others are being read from.
+ */
+static void say_it_is_C(ASTUnit *src)
+{
+	ASTContext &ctx = src->getASTContext();
+	TranslationUnitDecl *tu = ctx.getTranslationUnitDecl();
+	std::vector<Decl *> theirs;
+
+	for (Decl *d : tu->decls()) {
+		auto *nd = dyn_cast<NamedDecl>(d);
+
+		if (!isa<FunctionDecl>(d) && !isa<VarDecl>(d))
+			continue;
+		if (d->getDeclContext() != tu ||
+		    d->getLexicalDeclContext() != tu)
+			continue;
+		/* And only what carries its name out of the unit.  A
+		 * linkage specification is about names that leave, and
+		 * what does not leave is a different entity in every unit
+		 * that has one: six units that include a header with a
+		 * static function in it have six of that function, and
+		 * saying they are one would make five of them disappear.
+		 */
+		if (!nd || !nd->isExternallyVisible())
+			continue;
+		theirs.push_back(d);
+	}
+
+	if (theirs.empty())
+		return;
+
+	LinkageSpecDecl *ls = LinkageSpecDecl::Create(ctx, tu,
+		SourceLocation(), SourceLocation(), c_language(),
+		/*HasBraces=*/true);
+
+	tu->addDecl(ls);
+
+	for (Decl *d : theirs) {
+		tu->removeDecl(d);
+		d->setDeclContext(ls);
+		d->setLexicalDeclContext(ls);
+		ls->addDecl(d);
+	}
+}
+
 /* Import every top level declaration of "src" into the linked context.
  */
 static void link_unit(struct pet_linked_ast *linked, ASTUnit *src,
 	unsigned unit)
 {
 	ASTUnit *target = linked->units[0].get();
-	size_t first = linked->imported.size();
 	link_importer importer(target->getASTContext(),
 		target->getFileManager(), src->getASTContext(),
 		src->getFileManager(), /*MinimalImport=*/false,
 		linked->shared, unit, linked->imported);
+
+	importer.linked = linked;
+
 	for (Decl *d : src->getASTContext().getTranslationUnitDecl()->decls()) {
 		auto res = importer.Import(d);
 		if (res)
@@ -1757,12 +1851,6 @@ static void link_unit(struct pet_linked_ast *linked, ASTUnit *src,
 			"of them keeping initialisers of another record\n",
 			importer.seen_ctors, importer.stray_ctors);
 
-	if (src->getASTContext().getLangOpts().CPlusPlus ||
-	    !target->getASTContext().getLangOpts().CPlusPlus)
-		return;
-
-	for (size_t i = first; i < linked->imported.size(); ++i)
-		give_c_linkage(linked, linked->imported[i]);
 }
 
 /* Give the linked context the OpenMP of whichever unit asks for most.
@@ -1905,8 +1993,70 @@ struct pet_linked_ast *pet_ast_link(const char **files, int n)
 	 * which is what a name of its own is built from, so it is said
 	 * rather than taken from how many have been read so far.
 	 */
+	/* Each unit says what language it is in before any of it is
+	 * linked, since that is what decides where its declarations go.
+	 */
+	for (int i = 1; i < n; ++i)
+		if (!linked->units[i]->getASTContext().getLangOpts().CPlusPlus &&
+		    linked->units[0]->getASTContext().getLangOpts().CPlusPlus)
+			say_it_is_C(linked->units[i].get());
+
 	for (int i = 1; i < n; ++i)
 		link_unit(linked, linked->units[i].get(), i);
+
+	/* Every declaration of one name that the link ended up with,
+	 * asked about through PET_DECL_TRACE.
+	 *
+	 * What tells a link from a failure to link is not how many
+	 * declarations there are -- one entity declared twice has two,
+	 * and so do two entities declared once each -- but whether they
+	 * are one entity: the same canonical declaration, one chain, one
+	 * body between them.
+	 *
+	 * The walk goes through everything that can hold a function,
+	 * because a unit written in C ends up inside a linkage
+	 * specification that the importer made, which is not the one the
+	 * unit was given.
+	 */
+	if (const char *want = getenv("PET_DECL_TRACE")) {
+		ASTContext &ctx = linked->units[0]->getASTContext();
+		std::vector<Decl *> found;
+		std::function<void(DeclContext *)> walk =
+			[&](DeclContext *dc) {
+			for (Decl *d : dc->decls()) {
+				auto *nd = dyn_cast<NamedDecl>(d);
+
+				if (nd && isa<FunctionDecl>(d) &&
+				    nd->getNameAsString() == want)
+					found.push_back(d);
+				if (isa<LinkageSpecDecl>(d) ||
+				    isa<NamespaceDecl>(d))
+					walk(cast<DeclContext>(d));
+			}
+		};
+
+		walk(ctx.getTranslationUnitDecl());
+
+		std::set<const Decl *> entities;
+
+		for (Decl *d : found) {
+			auto *fd = cast<FunctionDecl>(d);
+			int links = 0, bodies = 0;
+
+			for (FunctionDecl *r : fd->redecls()) {
+				++links;
+				if (r->doesThisDeclarationHaveABody())
+					++bodies;
+			}
+			entities.insert(fd->getCanonicalDecl());
+			fprintf(stderr, "%s: found in a %s, a chain of %d "
+				"with %d body(ies)\n", want,
+				cast<Decl>(fd->getDeclContext())
+					->getDeclKindName(), links, bodies);
+		}
+		fprintf(stderr, "%s: %zu declaration(s) of %zu entity(ies)\n",
+			want, found.size(), entities.size());
+	}
 
 	return linked;
 }
