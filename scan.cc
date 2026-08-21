@@ -2356,6 +2356,50 @@ __isl_give pet_tree *PetScan::extract_inlined_call(CallExpr *call,
 	return inliner.inline_tree(tree, return_id);
 }
 
+/* Is "stmt" a call that can touch nothing the scop describes?
+ *
+ * A call that is given only values -- numbers, and the addresses of
+ * things written in the source, which is what a format and __func__
+ * are -- has been handed no way of reaching the memory the scop is
+ * about.  Whatever else it does happens outside: it prints.
+ *
+ * Such a call is left out of the scop entirely, which is a decision and
+ * not a reading: the model stops saying that the printing happened, and
+ * in exchange it says what the loop around it computes.  Written the
+ * other way round, one printf costs the whole loop it stands in.
+ *
+ * A pointer among the arguments is what tells the two apart.  snprintf
+ * is given somewhere to write and is not this; neither is memcpy, nor
+ * anything else that was handed an address.
+ */
+static bool is_printing_call(Stmt *stmt)
+{
+	CallExpr *call = dyn_cast<CallExpr>(stmt);
+	FunctionDecl *fd;
+
+	if (!call)
+		return false;
+	fd = pet_clang_direct_callee(call);
+	if (!fd || !fd->isVariadic())
+		return false;
+	if (!call->getType()->isVoidType() &&
+	    !call->getType()->isIntegerType())
+		return false;
+
+	for (unsigned i = 0; i < call->getNumArgs(); ++i) {
+		Expr *arg = pet_clang_strip_casts(call->getArg(i));
+		QualType qt = arg->getType();
+
+		if (isa<StringLiteral>(arg) || isa<PredefinedExpr>(arg))
+			continue;
+		if (qt->isPointerType() || qt->isArrayType() ||
+		    qt->isReferenceType())
+			return false;
+	}
+
+	return true;
+}
+
 /* Try and construct a pet_tree corresponding
  * to the expression statement "stmt".
  *
@@ -2372,6 +2416,10 @@ __isl_give pet_tree *PetScan::extract_expr_stmt(Stmt *stmt)
 {
 	pet_expr *expr;
 	pet_tree *tree;
+
+	if (is_printing_call(stmt))
+		return pet_tree_new_block(ctx, 0, 0);
+
 	pet_inlined_calls ic(this);
 
 	ic.collect(stmt);
