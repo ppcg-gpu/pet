@@ -1,6 +1,141 @@
 --- a/clang/lib/AST/ASTStructuralEquivalence.cpp
 +++ b/clang/lib/AST/ASTStructuralEquivalence.cpp
-@@ -2372,19 +2372,40 @@
+@@ -1701,8 +1701,36 @@
+         (DC2->isFunctionOrMethod() && DC1->isTranslationUnit()))
+       return true;
+ 
+-    if (DC1->getDeclKind() != DC2->getDeclKind())
++    // The two contexts are of different kinds.
++    //
++    // Except between a plain record and a C++ record, for the reason
++    // given at CheckKindSpecificEquivalence: one record described by one
++    // header is read into a RecordDecl by a unit read as C and into a
++    // CXXRecordDecl by a unit read as C++.  A record written inside
++    // another -- an anonymous struct inside an anonymous union, as glibc
++    // writes __atomic_wide_counter -- then sits in a context of one kind
++    // on one side and of the other kind on the other, and answering no on
++    // that alone carries all the way out: __atomic_wide_counter differs,
++    // so __pthread_cond_s differs, so pthread_cond_t differs, so
++    // ggml_threadpool differs, so ggml_barrier is two functions rather
++    // than one.  The names are still compared below, so two records that
++    // really sit in different places still come out different.
++    //
++    // Only those two kinds: a class template specialization is a record
++    // as well, and the comparison below asks for the other side to be one
++    // too.
++    auto plain_record = [](const DeclContext *DC) {
++      return DC->getDeclKind() == Decl::Record ||
++             DC->getDeclKind() == Decl::CXXRecord;
++    };
++    if (DC1->getDeclKind() != DC2->getDeclKind() &&
++        !(plain_record(DC1) && plain_record(DC2))) {
++      if (getenv("PET_DECL_TRACE"))
++        llvm::errs() << "    one sits in a " << DC1->getDeclKindName()
++                     << " and the other in a " << DC2->getDeclKindName()
++                     << "\n";
+       return false;
++    }
+     if (DC1->isTranslationUnit())
+       break;
+     if (DC1->isInlineNamespace() != DC2->isInlineNamespace())
+@@ -1762,8 +1790,22 @@
+   // another anonymous structure or union, respectively, if their members
+   // fulfill the preceding requirements. ... Otherwise, the structure, union,
+   // or enumerated types are incompatible.
+-  if (!NameIsStructurallyEquivalent(*D1, *D2))
++  bool watched = getenv("PET_DECL_TRACE") != nullptr;
++  auto said = [](const RecordDecl *D) {
++    std::string name = D->getNameAsString();
++    return name.empty() ? std::string("<anonymous>") : name;
++  };
++
++  if (watched)
++    llvm::errs() << "    weighing the record " << said(D1) << " ("
++                 << D1->Decl::getDeclKindName() << ") against " << said(D2)
++                 << " (" << D2->Decl::getDeclKindName() << ")\n";
++
++  if (!NameIsStructurallyEquivalent(*D1, *D2)) {
++    if (watched)
++      llvm::errs() << "    they differ in the name\n";
+     return false;
++  }
+ 
+   if (D1->isUnion() != D2->isUnion()) {
+     if (Context.Complain) {
+@@ -1774,6 +1816,8 @@
+       Context.Diag1(D1->getLocation(), diag::note_odr_tag_kind_here)
+           << D1->getDeclName() << (unsigned)D1->getTagKind();
+     }
++    if (watched)
++      llvm::errs() << "    they differ in being a union\n";
+     return false;
+   }
+ 
+@@ -1803,8 +1847,11 @@
+   // structural type (a local struct definition can be a valid redefinition of
+   // a file scope struct definition).
+   if (!Context.LangOpts.C23 &&
+-      !IsRecordContextStructurallyEquivalent(Context, D1, D2))
++      !IsRecordContextStructurallyEquivalent(Context, D1, D2)) {
++    if (watched)
++      llvm::errs() << "    they differ in the context they sit in\n";
+     return false;
++  }
+ 
+   // If both declarations are class template specializations, we know
+   // the ODR applies, so check the template and template arguments.
+@@ -1982,11 +2029,12 @@
+ 
+   // Check the fields for consistency.
+   CanQualType D2Type = Context.ToCtx.getCanonicalTagType(D2);
++  unsigned Index = 0;
+   RecordDecl::field_iterator Field2 = D2->field_begin(),
+                              Field2End = D2->field_end();
+   for (RecordDecl::field_iterator Field1 = D1->field_begin(),
+                                   Field1End = D1->field_end();
+-       Field1 != Field1End; ++Field1, ++Field2) {
++       Field1 != Field1End; ++Field1, ++Field2, ++Index) {
+     if (Field2 == Field2End) {
+       if (Context.Complain) {
+         Context.Diag2(D2->getLocation(),
+@@ -1998,11 +2046,24 @@
+             << Field1->getDeclName() << Field1->getType();
+         Context.Diag2(D2->getLocation(), diag::note_odr_missing_field);
+       }
++      if (watched)
++        llvm::errs() << "    " << said(D2) << " has no member " << Index
++                     << ", which in " << said(D1) << " is "
++                     << Field1->getNameAsString() << "\n";
+       return false;
+     }
+ 
+-    if (!IsStructurallyEquivalent(Context, *Field1, *Field2, D2Type))
++    if (!IsStructurallyEquivalent(Context, *Field1, *Field2, D2Type)) {
++      if (watched) {
++        llvm::errs() << "    they differ in member " << Index << ": "
++                     << Field1->getNameAsString() << " of "
++                     << Field1->getType().getAsString() << " against "
++                     << Field2->getNameAsString() << " of "
++                     << Field2->getType().getAsString() << "\n";
++        llvm::errs().flush();
++      }
+       return false;
++    }
+   }
+ 
+   if (Field2 != Field2End) {
+@@ -2015,6 +2076,10 @@
+           << Field2->getDeclName() << Field2->getType();
+       Context.Diag1(D1->getLocation(), diag::note_odr_missing_field);
+     }
++    if (watched)
++      llvm::errs() << "    " << said(D1) << " has no member " << Index
++                   << ", which in " << said(D2) << " is "
++                   << Field2->getNameAsString() << "\n";
+     return false;
+   }
+ 
+@@ -2372,19 +2437,40 @@
  
  static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
                                       FunctionDecl *D1, FunctionDecl *D2) {
@@ -45,7 +180,7 @@
  
    return true;
  }
-@@ -2700,8 +2721,22 @@
+@@ -2700,8 +2786,22 @@
      Decl *D1, Decl *D2) {
  
    // Kind mismatch.
@@ -69,7 +204,7 @@
  
    // Cast the Decls to their actual subclass so that the right overload of
    // IsStructurallyEquivalent is called.
-@@ -2729,6 +2764,18 @@
+@@ -2729,6 +2829,18 @@
          CheckCommonEquivalence(D1, D2) && CheckKindSpecificEquivalence(D1, D2);
  
      if (!Equivalent) {

@@ -42,9 +42,30 @@ which is what clang is built for, and comparing two units of a program,
 which may be written in both.
 
 Alongside it, diagnostics behind `PET_DECL_TRACE`: what the comparison
-of two functions decided and which pair of declarations the general
-comparison found to differ.  That is how the 652 were traced to their
-cause.
+of two functions decided, which pair of declarations the general
+comparison found to differ, which pair of records is being weighed,
+which member of the two the comparison stopped on, and which two kinds
+of context it refused.  That is how the 652 were traced to their cause,
+and the 29 that were left after them.
+
+The same difference is asked about a third time, of the context a
+record sits in.  A record written inside another -- an anonymous struct
+inside an anonymous union, as glibc writes `__atomic_wide_counter` --
+sits in a `RecordDecl` on the side read as C and in a `CXXRecordDecl` on
+the side read as C++, and the walk up the contexts answers no on the
+kind alone.  What that costs is the whole way out: `__atomic_wide_counter`
+differs, so `__pthread_cond_s` differs, so `pthread_cond_t` differs, so
+`ggml_threadpool` differs, so `ggml_barrier` is three functions of one
+name rather than one.  The two kinds are taken for one there as well,
+and the names of the contexts are still compared, so two records that
+really sit in different places still come out different.
+
+Only those two kinds, named one by one: a class template specialization
+is a record too, and the comparison a few lines below asks the other
+side to be a specialization as well.  Written as `isa<RecordDecl>` it
+lets through a specialization weighed against a plain record and hands
+that comparison a null -- `IsStructurallyEquivalent(..., D2=0x0)`, which
+is where linking 51 units died.
 
 ## 0002-source-manager-total-order.patch
 
