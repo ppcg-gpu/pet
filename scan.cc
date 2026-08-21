@@ -231,7 +231,7 @@ PetScan::~PetScan()
 	isl_union_map_free(value_bounds);
 }
 
-/* Report a diagnostic on the range "range", unless autodetect is set.
+/* Remember where a scop stopped and on what.
  *
  * Under autodetect nothing is reported, because a construct a scop
  * cannot hold is not a fault of the source: the scop simply ends there.
@@ -241,25 +241,32 @@ PetScan::~PetScan()
  * one line for each place a scop stopped, saying where and what --
  * whenever PET_SCOP_TRACE is set in the environment.
  */
+void PetScan::stopped_at(SourceRange range, const std::string &why)
+{
+	SourceLocation loc = range.getBegin();
+	std::string where = loc.printToString(PP.getSourceManager());
+
+	/* The first of them is kept, because that is the one that ended
+	 * the scop; the rest are what was left over after it had ended.
+	 */
+	if (first_stop.empty())
+		first_stop = where + ": " + why;
+	last_stop = where + ": " + why;
+
+	if (getenv("PET_SCOP_TRACE"))
+		fprintf(stderr, "a scop stops at %s: %s\n",
+			where.c_str(), why.c_str());
+}
+
+/* Report a diagnostic on the range "range", unless autodetect is set.
+ */
 void PetScan::report(SourceRange range, unsigned id)
 {
 	if (options->autodetect) {
 		DiagnosticsEngine &diag = PP.getDiagnostics();
-		SourceLocation loc = range.getBegin();
-		std::string where = loc.printToString(PP.getSourceManager());
-		StringRef why = diag.getDiagnosticIDs()->getDescription(id);
 
-		/* The first of them is kept, because that is the one that
-		 * ended the scop; the rest are what was left over after it
-		 * had ended.
-		 */
-		if (first_stop.empty())
-			first_stop = where + ": " + why.str();
-		last_stop = where + ": " + why.str();
-
-		if (getenv("PET_SCOP_TRACE"))
-			fprintf(stderr, "a scop stops at %s: %s\n",
-				where.c_str(), why.str().c_str());
+		stopped_at(range,
+			diag.getDiagnosticIDs()->getDescription(id).str());
 		return;
 	}
 
@@ -282,17 +289,90 @@ void PetScan::report(Decl *decl, unsigned id)
 	report(decl->getSourceRange(), id);
 }
 
+/* What kind of thing "stmt" is, in the words a reader would use.
+ *
+ * Everything a scan does not handle used to be reported as
+ * "unsupported", one word for every construct there is, and over an
+ * engine that one word was half of all the places a scop ended.  A map
+ * of where scops end is only worth reading if each place says what it
+ * met, so this names the construct.
+ *
+ * The names are of kinds, not of instances: a call says that it is a
+ * call through a pointer or a call to a builtin, never which function,
+ * or the map would have as many classes as the program has names.
+ * Where there is nothing more to say than what clang calls the node,
+ * that is what is said, which is still a name and not a shrug.
+ */
+static std::string what_it_is(Stmt *stmt)
+{
+	CallExpr *call;
+	MemberExpr *member;
+
+	if (!stmt)
+		return "nothing at all";
+
+	call = dyn_cast<CallExpr>(stmt);
+	if (call) {
+		FunctionDecl *fd = call->getDirectCallee();
+		const FunctionDecl *def;
+
+		if (!fd)
+			return "a call through a pointer";
+		if (fd->getBuiltinID() != 0)
+			return "a call to a builtin";
+		if (fd->isVariadic())
+			return "a call taking a variable number of arguments";
+		if (!fd->hasBody(def))
+			return "a call to a body the link does not hold";
+		return "a call";
+	}
+
+	member = dyn_cast<MemberExpr>(stmt);
+	if (member) {
+		ValueDecl *d = member->getMemberDecl();
+		RecordDecl *rd = d ? dyn_cast<RecordDecl>(d->getDeclContext())
+				   : NULL;
+
+		if (rd && rd->isUnion())
+			return "a member of a union";
+		return "a member of a record";
+	}
+
+	if (isa<CompoundLiteralExpr>(stmt))
+		return "a compound literal";
+	if (isa<StringLiteral>(stmt))
+		return "a string";
+	if (isa<InitListExpr>(stmt))
+		return "a list of initial values";
+	if (isa<UnaryExprOrTypeTraitExpr>(stmt))
+		return "a question about a type";
+	if (isa<ArraySubscriptExpr>(stmt))
+		return "a subscript";
+	if (isa<CastExpr>(stmt))
+		return "a cast";
+	if (isa<DeclRefExpr>(stmt))
+		return "a name";
+
+	return std::string("a ") + stmt->getStmtClassName();
+}
+
 /* Called if we found something we (currently) cannot handle.
- * We'll provide more informative warnings later.
  *
  * We only actually complain if autodetect is false.
  */
 void PetScan::unsupported(Stmt *stmt)
 {
 	DiagnosticsEngine &diag = PP.getDiagnostics();
-	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning,
-					   "unsupported");
-	report(stmt, id);
+	std::string why = "unsupported: " + what_it_is(stmt);
+	SourceRange range = stmt ? stmt->getSourceRange() : SourceRange();
+
+	if (options->autodetect) {
+		stopped_at(range, why);
+		return;
+	}
+
+	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning, "%0");
+	diag.Report(range.getBegin(), id) << why << range;
 }
 
 /* Report an unsupported unary operator, unless autodetect is set.

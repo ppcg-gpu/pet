@@ -460,6 +460,7 @@ public:
 	clang::FunctionDecl *get_summary_function(clang::CallExpr *call);
 private:
 
+	void stopped_at(clang::SourceRange range, const std::string &why);
 	void report(clang::SourceRange range, unsigned id);
 	void report(clang::Stmt *stmt, unsigned id);
 	void report(clang::Decl *decl, unsigned id);
