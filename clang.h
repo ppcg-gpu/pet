@@ -14,5 +14,6 @@ clang::Expr *pet_clang_strip_casts(clang::Expr *expr);
 int pet_clang_get_type_size(clang::QualType qt, clang::ASTContext &ast_context);
 clang::FunctionDecl *pet_clang_find_function_decl_with_body(
 	clang::FunctionDecl *fd);
+clang::FunctionDecl *pet_clang_direct_callee(clang::CallExpr *call);
 
 #endif

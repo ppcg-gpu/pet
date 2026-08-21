@@ -313,11 +313,38 @@ static std::string what_it_is(Stmt *stmt)
 
 	call = dyn_cast<CallExpr>(stmt);
 	if (call) {
-		FunctionDecl *fd = call->getDirectCallee();
+		FunctionDecl *fd = pet_clang_direct_callee(call);
 		const FunctionDecl *def;
 
-		if (!fd)
+		if (!fd) {
+			if (getenv("PET_CALLEE_TRACE")) {
+				Expr *c = call->getCallee();
+
+				fprintf(stderr, "the callee is");
+				while (c) {
+					fprintf(stderr, " %s",
+						c->getStmtClassName());
+					if (isa<ImplicitCastExpr>(c))
+						c = cast<ImplicitCastExpr>(c)->
+							getSubExpr();
+					else if (isa<ParenExpr>(c))
+						c = cast<ParenExpr>(c)->
+							getSubExpr();
+					else if (isa<DeclRefExpr>(c)) {
+						NamedDecl *d = cast<DeclRefExpr>(c)->getDecl();
+
+						fprintf(stderr, " -> %s, a %s",
+							d->getNameAsString().c_str(),
+							d->getDeclKindName());
+						c = NULL;
+					} else {
+						c = NULL;
+					}
+				}
+				fprintf(stderr, "\n");
+			}
 			return "a call through a pointer";
+		}
 		if (fd->getBuiltinID() != 0)
 			return "a call to a builtin";
 		if (fd->isVariadic())
@@ -341,7 +368,7 @@ static std::string what_it_is(Stmt *stmt)
 	if (isa<CompoundLiteralExpr>(stmt))
 		return "a compound literal";
 	if (isa<StringLiteral>(stmt))
-		return "a string";
+		return "a string written in the source";
 	if (isa<InitListExpr>(stmt))
 		return "a list of initial values";
 	if (isa<UnaryExprOrTypeTraitExpr>(stmt))
@@ -1126,7 +1153,7 @@ FunctionDecl *PetScan::find_decl_from_name(CallExpr *call, string name)
  */
 FunctionDecl *PetScan::get_summary_function(CallExpr *call)
 {
-	FunctionDecl *decl = call->getDirectCallee();
+	FunctionDecl *decl = pet_clang_direct_callee(call);
 	if (!decl)
 		return NULL;
 
@@ -1193,7 +1220,7 @@ __isl_give pet_expr *PetScan::extract_expr(CallExpr *expr)
 		return pet_expr_access_from_id(isl_id_copy(call2id[0][expr]),
 						ast_context);
 
-	fd = expr->getDirectCallee();
+	fd = pet_clang_direct_callee(expr);
 	if (!fd) {
 		unsupported(expr);
 		return NULL;
@@ -1911,7 +1938,7 @@ static bool is_trap_call(Stmt *stmt)
 	call = stmt ? dyn_cast<CallExpr>(stmt) : NULL;
 	if (!call)
 		return false;
-	fd = call->getDirectCallee();
+	fd = pet_clang_direct_callee(call);
 
 	return fd && fd->isNoReturn();
 }

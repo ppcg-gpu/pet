@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "clang.h"
+
 #include "ast_link.h"
 
 using namespace clang;
@@ -34,7 +36,7 @@ struct call_collector : RecursiveASTVisitor<call_collector> {
 	std::map<std::string, bool> resolved;
 
 	bool VisitCallExpr(CallExpr *call) {
-		FunctionDecl *fd = call->getDirectCallee();
+		FunctionDecl *fd = pet_clang_direct_callee(call);
 		if (!fd)
 			return true;
 		const FunctionDecl *def = NULL;

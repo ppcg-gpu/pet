@@ -73,7 +73,7 @@ pet_inlined_calls::~pet_inlined_calls()
  */
 bool pet_inlined_calls::VisitCallExpr(clang::CallExpr *call)
 {
-	FunctionDecl *named = call->getDirectCallee();
+	FunctionDecl *named = pet_clang_direct_callee(call);
 	FunctionDecl *fd = pet_clang_find_function_decl_with_body(named);
 
 	/* A function whose accesses were written down separately is one
@@ -125,7 +125,7 @@ bool pet_inlined_calls::VisitCallExpr(clang::CallExpr *call)
  */
 void pet_inlined_calls::add(CallExpr *call)
 {
-	FunctionDecl *fd = call->getDirectCallee();
+	FunctionDecl *fd = pet_clang_direct_callee(call);
 	QualType qt;
 	isl_id *id = NULL;
 

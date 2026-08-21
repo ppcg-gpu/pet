@@ -161,6 +161,77 @@ FunctionDecl *pet_clang_find_function_decl_with_body(FunctionDecl *fd)
 	return const_cast<FunctionDecl *>(def);
 }
 
+/* Which function does "call" call?
+ *
+ * Ordinarily the call names it, and clang says which.  Where it does
+ * not, the name written may still be a name for exactly one function:
+ *
+ *	constexpr auto to_f32 = type_conversion_table<src_t>::to_f32;
+ *	...
+ *	y[i] = to_f32(x[i]);
+ *
+ * is how ggml writes the conversion of one element, and to_f32 is a
+ * constant whose value is the address of a function.  Nothing about
+ * such a call is decided while the program runs; only the way it is
+ * written keeps clang from calling it direct.
+ *
+ * The constant is followed as far as it goes: the one written in the
+ * body names another, the static member of the table, and that one
+ * names the function.  Each step is a constant whose initialiser is one
+ * name, so each step has one answer; a few steps are allowed and no
+ * more, since a constant that names itself would otherwise be followed
+ * for as long as there is patience.
+ *
+ * Only a constant, only an initialiser that names one thing, and only a
+ * name, never an expression: a call this cannot follow stays a call
+ * that names nothing, and says so.
+ */
+FunctionDecl *pet_clang_direct_callee(CallExpr *call)
+{
+	Expr *callee;
+	ValueDecl *named;
+	FunctionDecl *fd = call->getDirectCallee();
+
+	if (fd)
+		return fd;
+
+	callee = call->getCallee();
+	if (!callee)
+		return NULL;
+
+	DeclRefExpr *ref = dyn_cast<DeclRefExpr>(callee->IgnoreParenImpCasts());
+
+	if (!ref)
+		return NULL;
+	named = ref->getDecl();
+
+	for (int step = 0; step < 4; ++step) {
+		VarDecl *var = dyn_cast<VarDecl>(named);
+		const Expr *init;
+
+		if (isa<FunctionDecl>(named))
+			return cast<FunctionDecl>(named);
+		if (!var || !var->isConstexpr())
+			return NULL;
+		init = var->getAnyInitializer();
+		if (!init)
+			return NULL;
+
+		init = init->IgnoreParenImpCasts();
+		if (isa<UnaryOperator>(init) &&
+		    cast<UnaryOperator>(init)->getOpcode() == UO_AddrOf)
+			init = cast<UnaryOperator>(init)->getSubExpr()->
+							IgnoreParenImpCasts();
+
+		ref = dyn_cast<DeclRefExpr>(const_cast<Expr *>(init));
+		if (!ref)
+			return NULL;
+		named = ref->getDecl();
+	}
+
+	return NULL;
+}
+
 /* Return the depth of an array of the given type.
  */
 int pet_clang_array_depth(QualType qt)
