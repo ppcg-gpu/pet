@@ -20,6 +20,31 @@ Applied to LLVM **22.1.5** (tag `llvmorg-22.1.5`, commit
     cd llvm-project
     patch -p1 < .../ThirdParty/pet/llvm-patches/0001-ast-importer-for-linking.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0002-source-manager-total-order.patch
+    patch -p1 < .../ThirdParty/pet/llvm-patches/0003-structural-equivalence-across-languages.patch
+
+## 0003-structural-equivalence-across-languages.patch
+
+A record described by a header is read into a `RecordDecl` by a unit
+read as C and into a `CXXRecordDecl` by a unit read as C++, and 0001
+makes the linked context keep the C++ one.  The comparison that decides
+whether two declarations are the same entity then answers no on the kind
+of declaration alone, before it has looked at anything, and every C
+function whose arguments mention a struct becomes two entities of one
+name -- 652 of them over 49 units of an engine.
+
+The two are compared as records instead, which is what the comparison
+would do for either of them, so two structs that really differ still
+come out different.  This is the same relaxation `link_equivalence.cc`
+already carries for the comparison `pet` does itself, moved to the one
+clang does for the importer, with its reason unchanged: that is the
+whole of the difference between comparing two units of one language,
+which is what clang is built for, and comparing two units of a program,
+which may be written in both.
+
+Alongside it, diagnostics behind `PET_DECL_TRACE`: what the comparison
+of two functions decided and which pair of declarations the general
+comparison found to differ.  That is how the 652 were traced to their
+cause.
 
 ## 0002-source-manager-total-order.patch
 

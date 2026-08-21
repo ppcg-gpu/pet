@@ -1,0 +1,90 @@
+--- a/clang/lib/AST/ASTStructuralEquivalence.cpp
++++ b/clang/lib/AST/ASTStructuralEquivalence.cpp
+@@ -2372,19 +2372,40 @@
+ 
+ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
+                                      FunctionDecl *D1, FunctionDecl *D2) {
+-  if (!IsStructurallyEquivalent(D1->getIdentifier(), D2->getIdentifier()))
++  const char *want = getenv("PET_DECL_TRACE");
++  bool watched = want && D1->getIdentifier() &&
++                 D1->getName().contains(want);
++
++  if (!IsStructurallyEquivalent(D1->getIdentifier(), D2->getIdentifier())) {
++    if (watched)
++      llvm::errs() << "    they differ in the name\n";
+     return false;
++  }
+ 
+   if (D1->isOverloadedOperator()) {
+-    if (!D2->isOverloadedOperator())
++    if (!D2->isOverloadedOperator()) {
++      if (watched)
++        llvm::errs() << "    one is an operator and one is not\n";
+       return false;
+-    if (D1->getOverloadedOperator() != D2->getOverloadedOperator())
++    }
++    if (D1->getOverloadedOperator() != D2->getOverloadedOperator()) {
++      if (watched)
++        llvm::errs() << "    they are different operators\n";
+       return false;
++    }
+   }
+ 
+   // FIXME: Consider checking for function attributes as well.
+-  if (!IsStructurallyEquivalent(Context, D1->getType(), D2->getType()))
++  if (!IsStructurallyEquivalent(Context, D1->getType(), D2->getType())) {
++    if (watched)
++      llvm::errs() << "    they differ in type: " << D1->getType().getAsString()
++                   << " against " << D2->getType().getAsString() << "\n";
+     return false;
++  }
++
++  if (watched)
++    llvm::errs() << "    the two declarations themselves agree; whatever "
++                    "differs is found by what follows\n";
+ 
+   return true;
+ }
+@@ -2700,8 +2721,22 @@
+     Decl *D1, Decl *D2) {
+ 
+   // Kind mismatch.
+-  if (D1->getKind() != D2->getKind())
++  //
++  // Except between a record and a C++ record.  Those are one kind of
++  // thing read by two languages: a struct described by a header is read
++  // into a RecordDecl by a unit read as C and into a CXXRecordDecl by a
++  // unit read as C++.  Answering no on that alone puts every struct
++  // that a C unit and a C++ unit share out of reach of a link, and with
++  // it every function whose arguments mention one.  The two are
++  // compared as records instead, which is what the comparison below
++  // would do for either of them, so two structs that really differ
++  // still come out different.
++  if (D1->getKind() != D2->getKind()) {
++    if (isa<RecordDecl>(D1) && isa<RecordDecl>(D2))
++      return ::IsStructurallyEquivalent(*this, cast<RecordDecl>(D1),
++                                        cast<RecordDecl>(D2));
+     return false;
++  }
+ 
+   // Cast the Decls to their actual subclass so that the right overload of
+   // IsStructurallyEquivalent is called.
+@@ -2729,6 +2764,18 @@
+         CheckCommonEquivalence(D1, D2) && CheckKindSpecificEquivalence(D1, D2);
+ 
+     if (!Equivalent) {
++      if (getenv("PET_DECL_TRACE")) {
++        auto *N1 = dyn_cast<NamedDecl>(D1);
++        auto *N2 = dyn_cast<NamedDecl>(D2);
++
++        llvm::errs() << "    the pair that differs is a "
++                     << D1->getDeclKindName() << " called "
++                     << (N1 ? N1->getNameAsString() : "<none>")
++                     << " against a " << D2->getDeclKindName()
++                     << " called "
++                     << (N2 ? N2->getNameAsString() : "<none>") << "\n";
++        llvm::errs().flush();
++      }
+       // Note that these two declarations are not equivalent (and we already
+       // know about it).
+       NonEquivalentDecls.insert(
