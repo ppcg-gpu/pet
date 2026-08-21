@@ -36,6 +36,9 @@
 #undef PACKAGE
 
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
 #include <map>
 #include <vector>
 #include <iostream>
@@ -1891,30 +1894,113 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	for (const std::string &n : apart_names)
 		fprintf(stderr, "  apart: %s\n", n.c_str());
 
-	size_t done = 0;
+	/* How many at once.
+	 *
+	 * Every entry is looked at on its own -- nothing one of them
+	 * works out is of any use to another -- so the only reason this
+	 * took half an hour was that it was done one at a time.  What
+	 * cannot be shared is the reading and linking of the units, which
+	 * is a minute and a half and four gigabytes; so the work is
+	 * divided after that is done, by handing the whole of it to
+	 * children of one process.  Each child sees the linked AST as its
+	 * parent left it, without reading it again and, until it writes,
+	 * without a second copy of it.
+	 *
+	 * Entries go round-robin rather than in blocks: what a function
+	 * costs to look at varies by four orders of magnitude, and a
+	 * block of the map is not a block of the work.
+	 */
+	long n_worker = sysconf(_SC_NPROCESSORS_ONLN);
 
-	for (FunctionDecl *body : entries) {
-		ScopLoc loc;
-		PetScan ps(PP, ast_context, body, loc, options,
-			isl_union_map_copy(vb), independent);
-		pet_scop *scop = ps.scan(body);
-		std::string where = body->getLocation().printToString(sm);
+	if (n_worker < 1)
+		n_worker = 1;
+	if ((size_t) n_worker > entries.size())
+		n_worker = entries.size();
 
-		fprintf(out, "%s\t%s\t%s\t%d\t%s\n",
-			body->getQualifiedNameAsString().c_str(),
-			where.c_str(), scop ? "scop" : "none",
-			scop ? scop->n_stmt : 0,
-			(scop ? ps.first_stop : ps.last_stop).empty() ? "-" :
-			(scop ? ps.first_stop : ps.last_stop).c_str());
-		pet_scop_free(scop);
+	std::vector<FILE *> part(n_worker);
+	std::vector<pid_t> child(n_worker);
 
-		/* Going over a hundred thousand functions takes long
-		 * enough that something has to say it is still going,
-		 * or the only way to tell is to watch the file grow.
+	/* Where a part of the map is written.
+	 *
+	 * Not a temporary file: a temporary file is a name in a directory
+	 * that somebody else shares -- /tmp here, which is small and kept
+	 * to a quota -- and a hundred of them written at once is somebody
+	 * else's disk that fills up.  What is wanted is a file that no
+	 * directory holds and that goes away by itself when the last
+	 * process that has it lets go, which is what an anonymous memory
+	 * file is.
+	 */
+	for (long i = 0; i < n_worker; ++i) {
+		int fd = memfd_create("pet-map-part", MFD_CLOEXEC);
+
+		if (fd >= 0)
+			part[i] = fdopen(fd, "w+");
+		if (fd < 0 || !part[i])
+			isl_die(ctx, isl_error_unknown,
+				"could not open a file for a part of the map",
+				return -1);
+	}
+
+	fprintf(stderr, "going over %zu function(s) %ld at a time\n",
+		entries.size(), n_worker);
+	fflush(NULL);
+
+	for (long i = 0; i < n_worker; ++i) {
+		child[i] = fork();
+		if (child[i] < 0)
+			isl_die(ctx, isl_error_unknown,
+				"could not start a part of the map",
+				return -1);
+		if (child[i] > 0)
+			continue;
+
+		for (size_t j = i; j < entries.size(); j += n_worker) {
+			FunctionDecl *body = entries[j];
+			ScopLoc loc;
+			PetScan ps(PP, ast_context, body, loc, options,
+				isl_union_map_copy(vb), independent);
+			pet_scop *scop = ps.scan(body);
+			std::string where = body->getLocation().printToString(sm);
+
+			fprintf(part[i], "%s\t%s\t%s\t%d\t%s\n",
+				body->getQualifiedNameAsString().c_str(),
+				where.c_str(), scop ? "scop" : "none",
+				scop ? scop->n_stmt : 0,
+				(scop ? ps.first_stop : ps.last_stop).empty() ?
+				"-" :
+				(scop ? ps.first_stop : ps.last_stop).c_str());
+			pet_scop_free(scop);
+		}
+		fflush(part[i]);
+
+		/* Nothing of what this child holds belongs to it: the
+		 * memory, the isl context and the AST are its parent's,
+		 * and it was given them to read.  Leaving without running
+		 * what runs at exit is how it gives them back.
 		 */
-		if (++done % 1000 == 0)
-			fprintf(stderr, "gone over %zu of %zu function(s)\n",
-				done, entries.size());
+		_exit(0);
+	}
+
+	for (long i = 0; i < n_worker; ++i) {
+		int status;
+
+		if (waitpid(child[i], &status, 0) < 0)
+			isl_die(ctx, isl_error_unknown,
+				"lost a part of the map", return -1);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			isl_die(ctx, isl_error_unknown,
+				"a part of the map did not finish",
+				return -1);
+	}
+
+	for (long i = 0; i < n_worker; ++i) {
+		char buffer[65536];
+		size_t n;
+
+		rewind(part[i]);
+		while ((n = fread(buffer, 1, sizeof(buffer), part[i])) > 0)
+			fwrite(buffer, 1, n, out);
+		fclose(part[i]);
 	}
 
 	isl_union_map_free(vb);

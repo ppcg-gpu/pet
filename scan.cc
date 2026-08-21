@@ -1791,10 +1791,70 @@ __isl_give pet_tree *PetScan::extract(__isl_take pet_expr *expr,
 
 /* Construct a pet_tree for an if statement.
  */
+/* Is "stmt" a call from which control never comes back?
+ */
+static bool is_trap_call(Stmt *stmt)
+{
+	CallExpr *call;
+	FunctionDecl *fd;
+
+	call = stmt ? dyn_cast<CallExpr>(stmt) : NULL;
+	if (!call)
+		return false;
+	fd = call->getDirectCallee();
+
+	return fd && fd->isNoReturn();
+}
+
+/* Does an execution that enters "stmt" never leave it again?
+ *
+ * A compound is left only by reaching its end, so one that holds a trap
+ * anywhere is never left either.  This asks about the whole of "stmt",
+ * which is not the same as asking whether "stmt" contributes nothing:
+ * the statements a compound runs before it traps are still run.
+ */
+static bool traps(Stmt *stmt)
+{
+	CompoundStmt *c;
+
+	if (!stmt)
+		return false;
+
+	c = dyn_cast<CompoundStmt>(stmt);
+	if (c) {
+		StmtIterator i;
+		StmtRange range = c->children();
+
+		for (i = range.first; i != range.second; ++i)
+			if (traps(*i))
+				return true;
+		return false;
+	}
+
+	return is_trap_call(stmt);
+}
+
+/* Construct a pet_tree for an if statement.
+ *
+ * An if whose only business is to trap is not a branch.  Every execution
+ * that reaches the statement after it took none of what the branch
+ * holds, so the branch contributes no read, no write and no place in
+ * the schedule: it is not part of what the scop describes.  Neither is
+ * the condition, which is why it is not even looked at -- an assertion
+ * is usually written about a pointer, and asking for that as an affine
+ * expression is what used to end the scop at the assertion, and with it
+ * the loop the assertion stands in.
+ *
+ * What is left unsaid is that the scop describes the executions that do
+ * not trap.  That is the contract the assertion itself states.
+ */
 __isl_give pet_tree *PetScan::extract(IfStmt *stmt)
 {
 	pet_expr *pe_cond;
 	pet_tree *tree, *tree_else;
+
+	if (!stmt->getElse() && traps(stmt->getThen()))
+		return pet_tree_new_block(ctx, 0, 0);
 
 	pe_cond = extract_expr(stmt->getCond());
 	tree = extract(stmt->getThen());
@@ -2221,6 +2281,9 @@ __isl_give pet_tree *PetScan::extract(Stmt *stmt, bool skip_declarations)
 
 	set_current_stmt(stmt);
 
+	if (is_trap_call(stmt))
+		return pet_tree_new_block(ctx, 0, 0);
+
 	if (isa<Expr>(stmt))
 		return extract_expr_stmt(cast<Expr>(stmt));
 
@@ -2388,6 +2451,25 @@ __isl_give pet_tree *PetScan::extract(StmtRange stmt_range, bool block,
 			pet_tree_free(tree_i);
 			break;
 		}
+
+		/* A child that holds nothing is not part of the block.
+		 *
+		 * An empty statement is one such, and so is a trap, which
+		 * is where this matters: autodetect takes the first run
+		 * of statements it can read and stops at the first it
+		 * cannot, skipping over what comes before the run begins.
+		 * A child that holds nothing would begin the run without
+		 * adding anything to it, so a body that opens with an
+		 * assertion would have its run begin at the assertion and
+		 * end at the first declaration after it -- 46 statements
+		 * of ggml_compute_forward_clamp_f16 became none that way.
+		 */
+		if (tree_i && pet_tree_get_type(tree_i) == pet_tree_block &&
+		    pet_tree_block_n_child(tree_i) == 0) {
+			pet_tree_free(tree_i);
+			continue;
+		}
+
 		if (child->getStmtClass() == Stmt::DeclStmtClass) {
 			if (options->autodetect)
 				kl.add_locals(cast<DeclStmt>(child));

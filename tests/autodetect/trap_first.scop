@@ -1,0 +1,30 @@
+start: 563
+end: 604
+indent: "\t"
+context: '[n] -> {  : -2147483648 <= n <= 2147483647 }'
+schedule: '{ domain: "[n] -> { S_0[i] : 0 <= i < n }", child: { schedule: "[n] ->
+  L_0[{ S_0[i] -> [(i)] }]" } }'
+arrays:
+- context: '{  :  }'
+  extent: '[n] -> { a[i0] : i0 >= 0 }'
+  element_type: int
+  element_size: 4
+statements:
+- line: 24
+  domain: '[n] -> { S_0[i] : 0 <= i < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_0[i] -> a[(i)] }'
+        reference: __pet_ref_0
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_0[i] -> [(i)] }'
+        reference: __pet_ref_1
+        read: 1
+        write: 0
