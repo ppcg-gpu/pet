@@ -1,5 +1,5 @@
-start: 563
-end: 604
+start: 519
+end: 560
 indent: "\t"
 context: '[n] -> {  : -2147483648 <= n <= 2147483647 }'
 schedule: '{ domain: "[n] -> { S_0[i] : 0 <= i < n }", child: { schedule: "[n] ->
@@ -10,7 +10,7 @@ arrays:
   element_type: int
   element_size: 4
 statements:
-- line: 24
+- line: 22
   domain: '[n] -> { S_0[i] : 0 <= i < n }'
   body:
     type: expression
