@@ -37,7 +37,7 @@
 
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/mman.h>
+
 #include <sys/wait.h>
 #include <map>
 #include <vector>
@@ -1917,29 +1917,8 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	if ((size_t) n_worker > entries.size())
 		n_worker = entries.size();
 
-	std::vector<FILE *> part(n_worker);
 	std::vector<pid_t> child(n_worker);
-
-	/* Where a part of the map is written.
-	 *
-	 * Not a temporary file: a temporary file is a name in a directory
-	 * that somebody else shares -- /tmp here, which is small and kept
-	 * to a quota -- and a hundred of them written at once is somebody
-	 * else's disk that fills up.  What is wanted is a file that no
-	 * directory holds and that goes away by itself when the last
-	 * process that has it lets go, which is what an anonymous memory
-	 * file is.
-	 */
-	for (long i = 0; i < n_worker; ++i) {
-		int fd = memfd_create("pet-map-part", MFD_CLOEXEC);
-
-		if (fd >= 0)
-			part[i] = fdopen(fd, "w+");
-		if (fd < 0 || !part[i])
-			isl_die(ctx, isl_error_unknown,
-				"could not open a file for a part of the map",
-				return -1);
-	}
+	int out_fd = fileno(out);
 
 	fprintf(stderr, "going over %zu function(s) %ld at a time\n",
 		entries.size(), n_worker);
@@ -1973,16 +1952,34 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 			 * look, and telling the two apart is the whole use
 			 * of the column.
 			 */
-			fprintf(part[i], "%s\t%s\t%s\t%d\t%s\n",
+			char *line = NULL;
+			int len = asprintf(&line, "%s\t%s\t%s\t%d\t%s\n",
 				body->getQualifiedNameAsString().c_str(),
 				where.c_str(), scop ? "scop" : "none",
 				scop ? scop->n_stmt : 0,
 				!said.empty() ? said.c_str() :
 				scop ? "-" :
 				"nothing in the body became a statement");
+
+			/* Written as one line and at once, into the file
+			 * the children share.  They share its offset as
+			 * well, so a line goes after the last one whoever
+			 * wrote it, and a line written in one call is not
+			 * broken across another's.
+			 *
+			 * Kept out of a buffer of its own on purpose: a
+			 * part of the map held until the end is a part
+			 * lost if the end never comes, and the run that
+			 * has to be looked at is exactly the one that had
+			 * to be stopped.
+			 */
+			if (len > 0) {
+				ssize_t r = write(out_fd, line, len);
+				(void) r;
+			}
+			free(line);
 			pet_scop_free(scop);
 		}
-		fflush(part[i]);
 
 		/* Nothing of what this child holds belongs to it: the
 		 * memory, the isl context and the AST are its parent's,
@@ -2002,16 +1999,6 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 			isl_die(ctx, isl_error_unknown,
 				"a part of the map did not finish",
 				return -1);
-	}
-
-	for (long i = 0; i < n_worker; ++i) {
-		char buffer[65536];
-		size_t n;
-
-		rewind(part[i]);
-		while ((n = fread(buffer, 1, sizeof(buffer), part[i])) > 0)
-			fwrite(buffer, 1, n, out);
-		fclose(part[i]);
 	}
 
 	isl_union_map_free(vb);
