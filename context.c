@@ -883,6 +883,8 @@ static __isl_give pet_expr *call_plug_in_summary(__isl_take pet_expr *call,
 		return pet_expr_free(call);
 
 	n = pet_expr_get_n_arg(call);
+	if (n > pet_function_summary_get_n_arg(summary))
+		n = pet_function_summary_get_n_arg(summary);
 	for (i = 0; i < n; ++i) {
 		pet_expr *arg_i;
 
