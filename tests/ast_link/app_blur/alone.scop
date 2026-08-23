@@ -28,6 +28,7 @@ statements:
         must_write: '{  }'
         index: '{ S_0[i] -> out[(i)] }'
         depth: 2
+        reference: __pet_ref_0
         read: 1
         write: 1
       - type: access
@@ -36,5 +37,6 @@ statements:
         must_write: '{  }'
         index: '{ S_0[i] -> in[(i)] }'
         depth: 2
+        reference: __pet_ref_1
         read: 1
         write: 1

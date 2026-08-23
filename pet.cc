@@ -1709,6 +1709,28 @@ static std::vector<FunctionDecl *> entries_of(DeclContext *dc,
 	return found;
 }
 
+/* Finish a scop scanned out of a linked AST.
+ *
+ * A scop that comes back from PetScan::scan is not yet the thing the
+ * single source path hands out: there, call_fn gives every access a
+ * reference identifier and anonymizes the scop before anyone sees it.
+ * The reference identifiers are what tagged access relations are built
+ * on, and a consumer that asks for those -- ppcg does, to work out
+ * dependences -- gets nothing at all from a scop that has none, and
+ * quietly generates nothing.
+ *
+ * The rest of what call_fn does belongs to reading a source file and
+ * has no meaning here: there is no context to intersect with and no
+ * value bounds handler to take array extents from.
+ */
+static __isl_give pet_scop *finish_linked_scop(__isl_take pet_scop *scop)
+{
+	scop = pet_scop_add_ref_ids(scop);
+	scop = pet_scop_anonymize(scop);
+
+	return scop;
+}
+
 /* Extract a pet_scop from the function called "function" in "linked".
  *
  * The units of a linked AST were read separately, and the pragmas that
@@ -1807,8 +1829,10 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 		PetScan ps(PP, ast_context, body, loc, options,
 			isl_union_map_copy(vb), independent);
 		scop = ps.scan(body);
-		if (scop)
+		if (scop) {
+			scop = finish_linked_scop(scop);
 			break;
+		}
 	}
 
 	isl_union_map_free(vb);
@@ -2076,7 +2100,7 @@ int pet_linked_ast_foreach_scop(isl_ctx *ctx, struct pet_linked_ast *linked,
 		if (!scop)
 			continue;
 
-		r = fn(scop, user);
+		r = fn(finish_linked_scop(scop), user);
 		if (r != 0)
 			break;
 	}

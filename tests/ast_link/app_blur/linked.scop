@@ -2,14 +2,14 @@ start: 193
 end: 249
 indent: "\t"
 context: '{  :  }'
-schedule: '{ domain: "{ S_1[i] : 0 <= i <= 63; S_6[i, j] : 0 <= i <= 63 and 0 < j
-  <= 62; S_5[i] : 0 <= i <= 63; S_2[i] : 0 <= i <= 63; S_4[i] : 0 <= i <= 63; S_0[i]
-  : 0 <= i <= 63; S_3[i] : 0 <= i <= 63 }", child: { schedule: "L_0[{ S_1[i] -> [(i)];
+schedule: '{ domain: "{ S_1[i] : 0 <= i <= 63; S_4[i] : 0 <= i <= 63; S_2[i] : 0 <=
+  i <= 63; S_5[i] : 0 <= i <= 63; S_0[i] : 0 <= i <= 63; S_3[i] : 0 <= i <= 63; S_6[i,
+  j] : 0 <= i <= 63 and 0 < j <= 62 }", child: { schedule: "L_0[{ S_1[i] -> [(i)];
   S_6[i, j] -> [(i)]; S_5[i] -> [(i)]; S_2[i] -> [(i)]; S_4[i] -> [(i)]; S_0[i] ->
   [(i)]; S_3[i] -> [(i)] }]", child: { sequence: [ { filter: "{ S_0[i] }" }, { filter:
   "{ S_1[i] }" }, { filter: "{ S_3[i] }" }, { filter: "{ S_4[i] }" }, { filter: "{
   S_6[i, j] }", child: { schedule: "L_1[{ S_6[i, j] -> [(j)] }]" } }, { filter: "{
-  S_5[i]; S_2[i] }", child: { set: [ { filter: "{ S_2[i] }" }, { filter: "{ S_5[i]
+  S_2[i]; S_5[i] }", child: { set: [ { filter: "{ S_2[i] }" }, { filter: "{ S_5[i]
   }" } ] } } ] } } }'
 arrays:
 - context: '{  :  }'
@@ -42,6 +42,7 @@ statements:
       - type: access
         killed: '{ S_0[i] -> __pet_arg_0[] }'
         index: '{ S_0[i] -> __pet_arg_0[] }'
+        reference: __pet_ref_0
         kill: 1
 - line: -1
   domain: '{ S_1[i] : 0 <= i <= 63 }'
@@ -53,10 +54,12 @@ statements:
       arguments:
       - type: access
         index: '{ S_1[i] -> __pet_arg_0[] }'
+        reference: __pet_ref_1
         read: 0
         write: 1
       - type: access
         index: '{ S_1[i] -> [(i)] }'
+        reference: __pet_ref_2
         read: 1
         write: 0
 - line: -1
@@ -70,6 +73,7 @@ statements:
       - type: access
         killed: '{ S_3[i] -> __pet_arg_1[] }'
         index: '{ S_3[i] -> __pet_arg_1[] }'
+        reference: __pet_ref_3
         kill: 1
 - line: -1
   domain: '{ S_4[i] : 0 <= i <= 63 }'
@@ -81,10 +85,12 @@ statements:
       arguments:
       - type: access
         index: '{ S_4[i] -> __pet_arg_1[] }'
+        reference: __pet_ref_4
         read: 0
         write: 1
       - type: access
         index: '{ S_4[i] -> [(i)] }'
+        reference: __pet_ref_5
         read: 1
         write: 0
 - line: 5
@@ -97,6 +103,7 @@ statements:
       arguments:
       - type: access
         index: '{ S_6[i, j] -> out[(j)] }'
+        reference: __pet_ref_6
         read: 0
         write: 1
       - type: op
@@ -110,14 +117,17 @@ statements:
             arguments:
             - type: access
               index: '{ S_6[i, j] -> in[(-1 + j)] }'
+              reference: __pet_ref_7
               read: 1
               write: 0
             - type: access
               index: '{ S_6[i, j] -> in[(j)] }'
+              reference: __pet_ref_8
               read: 1
               write: 0
           - type: access
             index: '{ S_6[i, j] -> in[(1 + j)] }'
+            reference: __pet_ref_9
             read: 1
             write: 0
         - type: double
@@ -134,6 +144,7 @@ statements:
       - type: access
         killed: '{ S_2[i] -> __pet_arg_0[] }'
         index: '{ S_2[i] -> __pet_arg_0[] }'
+        reference: __pet_ref_10
         kill: 1
 - line: -1
   domain: '{ S_5[i] : 0 <= i <= 63 }'
@@ -146,4 +157,5 @@ statements:
       - type: access
         killed: '{ S_5[i] -> __pet_arg_1[] }'
         index: '{ S_5[i] -> __pet_arg_1[] }'
+        reference: __pet_ref_11
         kill: 1
