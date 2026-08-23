@@ -435,6 +435,21 @@ add_test(NAME PET_Loopback_return_call
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLoopbackTest.cmake
 )
 
+# A call that hands over fewer arguments than the body declares
+# parameters, which a default value that was never written out makes
+# ordinary.  Going over the body's parameters and reaching into the call
+# for each one read past the end of the call and took the mapper's worker
+# down with SIGSEGV.
+add_test(NAME PET_LinkedScop_map_default_arg
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DEXTRACTOR=$<TARGET_FILE:pet_linked_scop>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/default_arg
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/default_arg
+        "-DUNITS=uses_ios.cpp"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMapCompletesTest.cmake
+)
+
 #--------------------------------------------------------------------
 # PET Test Framework
 #--------------------------------------------------------------------

@@ -2210,6 +2210,16 @@ static bool is_access_expr_type(Expr *expr)
  * In case of arrays, the actual argument needs to be an expression
  * of a type that can be converted to an access expression or the address
  * of such an expression, ignoring implicit and redundant casts.
+ *
+ * A call is not required to carry an argument for every parameter the
+ * body declares: a parameter with a default value that was never written
+ * out is one the call does not hand over, and after a link the call and
+ * the body it is matched to were read separately.  Reaching for an
+ * argument that is not there reads past the end of the call.  A body
+ * whose parameters cannot all be bound is not put in place -- binding
+ * some of them would leave the rest standing for nothing -- and the call
+ * stays a call, which is what happens to every other argument this
+ * cannot make sense of.
  */
 int PetScan::set_inliner_arguments(pet_inliner &inliner, CallExpr *call,
 	FunctionDecl *fd)
@@ -2217,6 +2227,10 @@ int PetScan::set_inliner_arguments(pet_inliner &inliner, CallExpr *call,
 	unsigned n;
 
 	n = fd->getNumParams();
+	if (n > call->getNumArgs()) {
+		report_unsupported_inline_function_argument(call);
+		return -1;
+	}
 	for (unsigned i = 0; i < n; ++i) {
 		ParmVarDecl *parm = fd->getParamDecl(i);
 		QualType type = parm->getType();
