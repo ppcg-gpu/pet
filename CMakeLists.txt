@@ -373,6 +373,14 @@ endif()
 add_linked_scop_test(blur app_blur "blur;blur_row" blur linked.scop)
 add_linked_scop_test(blur_unlinked app_blur "blur" blur alone.scop)
 
+# Two bodies put in place of two calls inside one function.  Each body
+# holds the result of the call it came from in a variable of its own, and
+# the names of those variables have to differ: with the counter that
+# names them belonging to each scan rather than to the walk, every body
+# started again at __pet_ret_0 and the scop declared that one name three
+# times, which is not a scop any code can be generated from.
+add_linked_scop_test(merge_inlined merge "total;sum;scale" total total.scop)
+
 # A link that refuses part of what it was given: two units define the
 # same struct differently, so the struct and what is written in terms of
 # it cannot become one entity.  In --map mode a refusal is a thing to

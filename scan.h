@@ -162,6 +162,16 @@ struct pet_walk {
 	 * check the cache and do not recount. */
 	std::map<clang::FunctionDecl *, int> body_stmt_count;
 
+	/* How many variables holding the return value of an inlined call
+	 * have been named so far.  It counts over the whole walk and not
+	 * over one scan: a body put in place of a call is read by a scan
+	 * of its own, and a counter belonging to each scan starts again
+	 * at zero for every body, so two bodies inlined into one scop
+	 * both name their variable __pet_ret_0 and the scop declares
+	 * that name twice.
+	 */
+	int n_ret;
+
 	/* Per-guard firing counters for already_inlining diagnostics. */
 	int n_no_return;
 	int n_depth;
@@ -169,7 +179,7 @@ struct pet_walk {
 	int n_cycle;
 
 	pet_walk() : summary_depth(0), inline_depth(0), total_stmts(0),
-		n_no_return(0), n_depth(0), n_too_many_stmts(0),
+		n_ret(0), n_no_return(0), n_depth(0), n_too_many_stmts(0),
 		n_cycle(0) {}
 };
 
@@ -247,7 +257,6 @@ struct PetScan {
 	/* Sequence number of the next temporary inlined argument variable. */
 	int n_arg;
 	/* Sequence number of the next temporary inlined return variable. */
-	int n_ret;
 
 	/* The functions whose summary is being worked out right now, and
 	 * how many of them there are.
@@ -349,7 +358,7 @@ struct PetScan {
 		value_bounds(value_bounds), last_line(0), current_line(0),
 		independent(independent), n_rename(0),
 		declared_names_collected(false), call2id(NULL),
-		n_arg(0), n_ret(0), walk(&own_walk) {
+		n_arg(0), walk(&own_walk) {
 		id_size = isl_id_to_pet_expr_alloc(ctx, 0);
 	}
 

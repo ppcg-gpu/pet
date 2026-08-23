@@ -131,7 +131,7 @@ void pet_inlined_calls::add(CallExpr *call)
 
 	qt = fd->getReturnType();
 	if (!qt->isVoidType()) {
-		id = pet_id_ret_from_type(scan->ctx, scan->n_ret++, qt);
+		id = pet_id_ret_from_type(scan->ctx, scan->walk->n_ret++, qt);
 		call2id[call] = isl_id_copy(id);
 	}
 	scan->call2id = &this->call2id;
