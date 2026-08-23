@@ -372,6 +372,21 @@ endif()
 add_linked_scop_test(blur app_blur "blur;blur_row" blur linked.scop)
 add_linked_scop_test(blur_unlinked app_blur "blur" blur alone.scop)
 
+# A link that refuses part of what it was given: two units define the
+# same struct differently, so the struct and what is written in terms of
+# it cannot become one entity.  In --map mode a refusal is a thing to
+# report and not a thing to die on: the exit code is zero and the refused
+# names appear in stderr.
+add_test(NAME PET_LinkedScop_map_refusals
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DEXTRACTOR=$<TARGET_FILE:pet_linked_scop>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/map_refusals
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/map_refusals
+        "-DUNITS=unit_a.c|unit_b.c"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMapRefusalsTest.cmake
+)
+
 #--------------------------------------------------------------------
 # PET Test Framework
 #--------------------------------------------------------------------
