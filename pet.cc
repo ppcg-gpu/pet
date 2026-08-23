@@ -38,6 +38,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <sys/resource.h>
+
 #include <sys/wait.h>
 #include <map>
 #include <vector>
@@ -1932,6 +1934,18 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 				return -1);
 		if (child[i] > 0)
 			continue;
+
+		/* A child that would take the machine down with it
+		 * is stopped by the kernel before it does.
+		 */
+		{
+			struct rlimit as_limit = { 16ULL * 1024 * 1024 * 1024,
+				16ULL * 1024 * 1024 * 1024 };
+			if (setrlimit(RLIMIT_AS, &as_limit) != 0)
+				isl_die(ctx, isl_error_unknown,
+					"could not set a memory limit",
+					_exit(1));
+		}
 
 		for (size_t j = i; j < entries.size(); j += n_worker) {
 			FunctionDecl *body = entries[j];

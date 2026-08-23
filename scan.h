@@ -118,17 +118,22 @@ struct PetTypes {
  */
 static const int max_inline_depth = 32;
 
-/* How many calls are put in place of at all, going over one function.
+/* How many AST statement nodes are put in place of calls at most,
+ * going over one function.
  *
  * A cycle is caught by the set and a long chain by the depth, and
  * neither catches what is neither: a tree of calls that does not repeat
  * and is not deep, but is wide at every level.  GGML_ASSERT alone
  * reaches ggml_abort, which reaches the printing of a backtrace, which
  * reaches the standard library, and thirty-two levels of that is a
- * number of paths no machine finishes.  This is the count of how many
- * were put in place, whatever their shape.
+ * number of paths no machine finishes.
+ *
+ * Instead of counting the number of calls (which says nothing about how
+ * large each inlined body is), this counts the actual AST Stmt nodes
+ * being inlined.  A function of two thousand statements counts for two
+ * thousand, not for one, and many small helpers total up honestly.
  */
-static const int max_inlined_calls = 1000;
+static const int max_inlined_stmts = 100000;
 
 /* What a walk over one function shares with every walk it starts.
  *
@@ -149,17 +154,23 @@ struct pet_walk {
 	/* How far down each of the two goes right now. */
 	int summary_depth;
 	int inline_depth;
-	/* How many bodies have been put in place at all. */
-	int inlined_calls;
+	/* How many AST statement nodes have been put in place at all,
+	 * over every function body inlined so far. */
+	int total_stmts;
+	/* How many AST statement nodes each function body holds.
+	 * Counted once and cached; many calls to the same function
+	 * check the cache and do not recount. */
+	std::map<clang::FunctionDecl *, int> body_stmt_count;
 
 	/* Per-guard firing counters for already_inlining diagnostics. */
 	int n_no_return;
 	int n_depth;
-	int n_calls;
+	int n_too_many_stmts;
 	int n_cycle;
 
-	pet_walk() : summary_depth(0), inline_depth(0), inlined_calls(0),
-		n_no_return(0), n_depth(0), n_calls(0), n_cycle(0) {}
+	pet_walk() : summary_depth(0), inline_depth(0), total_stmts(0),
+		n_no_return(0), n_depth(0), n_too_many_stmts(0),
+		n_cycle(0) {}
 };
 
 struct PetScan {
@@ -308,9 +319,9 @@ struct PetScan {
 			walk->n_depth++;
 			why = "bodies are not followed that deep";
 		}
-		else if (walk->inlined_calls >= max_inlined_calls) {
-			walk->n_calls++;
-			why = "enough bodies have been put in place already";
+		else if (walk->total_stmts + count_body_stmts(fd) > max_inlined_stmts) {
+			walk->n_too_many_stmts++;
+			why = "enough statement nodes have been put in place already";
 		}
 		else if (walk->inlining.find(fd) != walk->inlining.end()) {
 			walk->n_cycle++;
@@ -359,6 +370,7 @@ private:
 	 */
 	std::map<const clang::Type *, bool> recursive;
 	bool is_recursive(clang::QualType qt);
+		int count_body_stmts(clang::FunctionDecl *fd);
 
 	void set_current_stmt(clang::Stmt *stmt);
 	bool is_current_stmt_marked_independent();

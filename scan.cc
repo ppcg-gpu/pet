@@ -230,8 +230,8 @@ PetScan::~PetScan()
 	isl_id_to_pet_expr_free(id_size);
 	isl_union_map_free(value_bounds);
 
-	fprintf(stderr, "pet_walk guard counters: noreturn=%d depth=%d calls=%d cycle=%d\n",
-		own_walk.n_no_return, own_walk.n_depth, own_walk.n_calls, own_walk.n_cycle);
+	fprintf(stderr, "pet_walk guard counters: noreturn=%d depth=%d stmts=%d cycle=%d\n",
+		own_walk.n_no_return, own_walk.n_depth, own_walk.n_too_many_stmts, own_walk.n_cycle);
 }
 
 /* Remember where a scop stopped and on what.
@@ -2370,14 +2370,14 @@ __isl_give pet_tree *PetScan::extract_inlined_call(CallExpr *call,
 
 	walk->inlining.insert(fd);
 	++walk->inline_depth;
-	++walk->inlined_calls;
+	walk->total_stmts += count_body_stmts(fd);
 
-	/* Going over one function can put a thousand bodies in place, and
+	/* Going over one function can put many bodies in place, and
 	 * watching a file that does not grow is no way to learn that.
 	 */
-	if (walk->inlined_calls % 1000 == 0)
-		fprintf(stderr, "put %d bodies in place so far\n",
-			walk->inlined_calls);
+	if (walk->total_stmts % 10000 == 0)
+		fprintf(stderr, "put %d statement nodes in place so far\n",
+			walk->total_stmts);
 
 	PetScan body_scan(PP, ast_context, fd, loc, options,
 				isl_union_map_copy(value_bounds), independent);
@@ -4035,6 +4035,32 @@ bool RecursionDetector::is_recursive(QualType qt)
 		return rec ? is_recursive(rec) : false;
 	}
 	return false;
+}
+
+/* Count the number of AST Stmt nodes in the body of "fd", cached.
+ *
+ * The count is shared across the whole walk and computed at most once
+ * per function: many calls to the same function hit the cache.
+ */
+int PetScan::count_body_stmts(FunctionDecl *fd)
+{
+	auto it = walk->body_stmt_count.find(fd);
+	if (it != walk->body_stmt_count.end())
+		return it->second;
+
+	int count = 0;
+	Stmt *body = fd->getBody();
+	if (body) {
+		struct StmtCounter : RecursiveASTVisitor<StmtCounter> {
+			int &n;
+			StmtCounter(int &n) : n(n) {}
+			bool VisitStmt(Stmt *s) { ++n; return true; }
+		};
+		StmtCounter counter(count);
+		counter.TraverseStmt(body);
+	}
+	walk->body_stmt_count[fd] = count;
+	return count;
 }
 
 /* Is the type "qt" recursive?
