@@ -44,7 +44,7 @@ arrays:
   element_size: 4
   declared: 1
 - context: '{  :  }'
-  extent: '{ __pet_arg_0[] }'
+  extent: '{ __pet_arg_1[] }'
   element_type: int
   element_size: 4
   declared: 1
@@ -161,8 +161,8 @@ statements:
       operation: kill
       arguments:
       - type: access
-        killed: '{ S_8[i, i''] -> __pet_arg_0[] }'
-        index: '{ S_8[i, i''] -> __pet_arg_0[] }'
+        killed: '{ S_8[i, i''] -> __pet_arg_1[] }'
+        index: '{ S_8[i, i''] -> __pet_arg_1[] }'
         reference: __pet_ref_7
         kill: 1
 - line: -1
@@ -174,7 +174,7 @@ statements:
       operation: =
       arguments:
       - type: access
-        index: '{ S_9[i, i''] -> __pet_arg_0[] }'
+        index: '{ S_9[i, i''] -> __pet_arg_1[] }'
         reference: __pet_ref_8
         read: 0
         write: 1
@@ -193,8 +193,8 @@ statements:
       operation: =
       arguments:
       - type: access
-        index: '{ S_11[i, i'', i'''', j] -> s_a[s[(i''), (i'')] -> a[(10 + i''''),
-          (20 + j)]] }'
+        index: '{ S_11[i, i'', i'''', j] -> s_a[s[(i), (i'')] -> a[(10 + i''''), (20
+          + j)]] }'
         reference: __pet_ref_10
         read: 0
         write: 1
@@ -212,7 +212,7 @@ statements:
       operation: =
       arguments:
       - type: access
-        index: '{ S_12[i, i''] -> s_b[s[(i''), (i'')] -> b[(5)]] }'
+        index: '{ S_12[i, i''] -> s_b[s[(i), (i'')] -> b[(5)]] }'
         reference: __pet_ref_12
         read: 0
         write: 1
@@ -227,8 +227,8 @@ statements:
       operation: kill
       arguments:
       - type: access
-        killed: '{ S_10[i, i''] -> __pet_arg_0[] }'
-        index: '{ S_10[i, i''] -> __pet_arg_0[] }'
+        killed: '{ S_10[i, i''] -> __pet_arg_1[] }'
+        index: '{ S_10[i, i''] -> __pet_arg_1[] }'
         reference: __pet_ref_13
         kill: 1
 - line: 16

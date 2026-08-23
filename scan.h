@@ -172,6 +172,19 @@ struct pet_walk {
 	 */
 	int n_ret;
 
+	/* How many temporary variables holding an index of an array
+	 * argument of an inlined call have been named so far.  It counts
+	 * over the whole walk and not over one scan, for the same reason
+	 * as n_ret: a body put in place of a call is read by a scan of
+	 * its own, so a counter belonging to each scan starts again at
+	 * zero for every body.  A call inside an inlined body then names
+	 * its index __pet_arg_0 again, and since an isl_id is its name,
+	 * that is not a second variable but the very same one: the outer
+	 * index is overwritten by the inner one before it is read, and
+	 * the scop says the call wrote somewhere it did not.
+	 */
+	int n_arg;
+
 	/* Per-guard firing counters for already_inlining diagnostics. */
 	int n_no_return;
 	int n_depth;
@@ -179,8 +192,8 @@ struct pet_walk {
 	int n_cycle;
 
 	pet_walk() : summary_depth(0), inline_depth(0), total_stmts(0),
-		n_ret(0), n_no_return(0), n_depth(0), n_too_many_stmts(0),
-		n_cycle(0) {}
+		n_ret(0), n_arg(0), n_no_return(0), n_depth(0),
+		n_too_many_stmts(0), n_cycle(0) {}
 };
 
 struct PetScan {
@@ -253,10 +266,6 @@ struct PetScan {
 	 * that return a value to the corresponding variables.
 	 */
 	std::map<clang::Stmt *, isl_id *> *call2id;
-
-	/* Sequence number of the next temporary inlined argument variable. */
-	int n_arg;
-	/* Sequence number of the next temporary inlined return variable. */
 
 	/* The functions whose summary is being worked out right now, and
 	 * how many of them there are.
@@ -358,7 +367,7 @@ struct PetScan {
 		value_bounds(value_bounds), last_line(0), current_line(0),
 		independent(independent), n_rename(0),
 		declared_names_collected(false), call2id(NULL),
-		n_arg(0), walk(&own_walk) {
+		walk(&own_walk) {
 		id_size = isl_id_to_pet_expr_alloc(ctx, 0);
 	}
 

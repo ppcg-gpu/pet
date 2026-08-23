@@ -2373,7 +2373,7 @@ __isl_give pet_tree *PetScan::extract_inlined_call(CallExpr *call,
 {
 	pet_tree *tree;
 	pet_loc *tree_loc;
-	pet_inliner inliner(ctx, n_arg, ast_context);
+	pet_inliner inliner(ctx, walk->n_arg, ast_context);
 
 	if (set_inliner_arguments(inliner, call, fd) < 0)
 		return NULL;
