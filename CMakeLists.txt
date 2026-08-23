@@ -414,6 +414,19 @@ add_test(NAME PET_PrintOriginal
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPrintOriginalTest.cmake
 )
 
+# A scop that ends in a return of a call, printed back out.  The
+# printer's case for a return tree asked it for its expression with the
+# accessor for an expression tree, got nothing, and printing nothing
+# went down with it; nothing else in pet or in ppcg prints a return.
+add_test(NAME PET_Loopback_return_call
+    COMMAND ${CMAKE_COMMAND}
+        -DTOOL=$<TARGET_FILE:pet_loopback>
+        -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/loopback/return_call.c
+        -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/loopback/return_call.expected
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/loopback
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLoopbackTest.cmake
+)
+
 #--------------------------------------------------------------------
 # PET Test Framework
 #--------------------------------------------------------------------

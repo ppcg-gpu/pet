@@ -787,7 +787,7 @@ static __isl_give isl_printer *print_pet_tree_return(__isl_take isl_printer *p,
 {
 	pet_expr *expr;
 
-	expr = pet_tree_expr_get_expr(tree);
+	expr = pet_tree_return_get_expr(tree);
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "return ");
 	p = print_pet_expr(p, expr, 1, ref2expr);

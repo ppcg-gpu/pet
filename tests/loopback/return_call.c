@@ -1,0 +1,18 @@
+/* A scop that ends in a return of a call, printed back out.
+ *
+ * Autodetection takes a whole function body, so the return at the end
+ * of it is part of the scop, and a call that has no body here stays a
+ * call.  Printing that statement goes through the printer's case for a
+ * return tree, which asked a return tree for its expression with the
+ * accessor for an expression tree: it got nothing back and printing
+ * nothing is what crashed.
+ *
+ * Nothing else in pet or in ppcg prints a return, so this is the only
+ * thing that asks.  ppcg on this file went down with SIGSEGV.
+ */
+float other(float *a, int n);
+
+float g(float *a, int n)
+{
+	return other(a, n);
+}
