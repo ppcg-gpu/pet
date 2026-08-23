@@ -41,6 +41,8 @@
  * of the region, where end points to the first character after the region.
  * "line" is the line number of a line inside the region.
  * "indentation" is (a reasonable guess at) the indentation of the region.
+ * "filename" is the name of the source file containing the region,
+ * or NULL if no source file is known.
  *
  * A special pet_loc_dummy instance is used to indicate that
  * no offset information is available (yet).
@@ -53,6 +55,7 @@ struct pet_loc {
 	unsigned end;
 	int line;
 	char *indent;
+	char *filename;
 };
 
 /* A special pet_loc object that is used to indicate that
@@ -67,13 +70,17 @@ pet_loc pet_loc_dummy = {
 	.start = 0,
 	.end = 0,
 	.line = -1,
-	.indent = ""
+	.indent = "",
+	.filename = NULL
 };
 
-/* Allocate a pet_loc with the given start, end, line number and indentation.
+/* Allocate a pet_loc with the given start, end, line number, indentation
+ * and filename.  "filename" is the name of the source file, or NULL if
+ * no source file is known.
  */
 __isl_give pet_loc *pet_loc_alloc(isl_ctx *ctx,
-	unsigned start, unsigned end, int line, __isl_take char *indent)
+	unsigned start, unsigned end, int line, __isl_take char *indent,
+	const char *filename)
 {
 	pet_loc *loc;
 
@@ -92,6 +99,7 @@ __isl_give pet_loc *pet_loc_alloc(isl_ctx *ctx,
 	loc->end = end;
 	loc->line = line;
 	loc->indent = indent;
+	loc->filename = filename ? strdup(filename) : NULL;
 
 	return loc;
 error:
@@ -116,7 +124,7 @@ __isl_give pet_loc *pet_loc_cow(__isl_take pet_loc *loc)
 		return loc;
 	loc->ref--;
 	return pet_loc_alloc(loc->ctx, loc->start, loc->end, loc->line,
-				strdup(loc->indent));
+				strdup(loc->indent), loc->filename);
 }
 
 /* Return an extra reference to "loc".
@@ -149,6 +157,7 @@ __isl_null pet_loc *pet_loc_free(__isl_take pet_loc *loc)
 		return NULL;
 
 	free(loc->indent);
+	free(loc->filename);
 	isl_ctx_deref(loc->ctx);
 	free(loc);
 	return NULL;
@@ -180,6 +189,14 @@ int pet_loc_get_line(__isl_keep pet_loc *loc)
 __isl_keep const char *pet_loc_get_indent(__isl_keep pet_loc *loc)
 {
 	return loc ? loc->indent : NULL;
+}
+
+/* Return the filename of the source file containing "loc",
+ * or NULL if no source file is known.
+ */
+const char *pet_loc_get_filename(__isl_keep pet_loc *loc)
+{
+	return loc ? loc->filename : NULL;
 }
 
 /* Update loc->start and loc->end to include the region from "start"

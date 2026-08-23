@@ -73,15 +73,11 @@
  *
  * A missing condition (skip[type] == NULL) means that we don't want
  * to skip anything.
- *
- * Additionally, we keep track of the original input file
- * inside pet_transform_C_source.
  */
 struct pet_scop_ext {
 	struct pet_scop scop;
 
 	isl_multi_pw_aff *skip[2];
-	FILE *input;
 };
 
 /* Construct a pet_stmt with given domain and statement number from a pet_tree.
@@ -664,7 +660,8 @@ struct pet_scop *pet_scop_update_start_end(struct pet_scop *scop,
 
 	if (scop->loc == &pet_loc_dummy)
 		scop->loc = pet_loc_alloc(isl_set_get_ctx(scop->context),
-					    start, end, -1, strdup(""));
+					    start, end, -1, strdup(""),
+					    NULL);
 	else
 		scop->loc = pet_loc_update_start_end(scop->loc, start, end);
 
@@ -3441,38 +3438,28 @@ int pet_scop_has_data_dependent_conditions(struct pet_scop *scop)
 	return 0;
 }
 
-/* Keep track of the "input" file inside the (extended) "scop".
- */
-struct pet_scop *pet_scop_set_input_file(struct pet_scop *scop, FILE *input)
-{
-	struct pet_scop_ext *ext = (struct pet_scop_ext *) scop;
-
-	if (!scop)
-		return NULL;
-
-	ext->input = input;
-
-	return scop;
-}
-
 /* Print the original code corresponding to "scop" to printer "p".
  *
- * pet_scop_print_original can only be called from
- * a pet_transform_C_source callback.  This means that the input
- * file is stored in the extended scop and that the printer prints
- * to a file.
+ * The region is read back from the file its pet_loc names, so this does
+ * not depend on the scop having been handed a file that is still open:
+ * a scop extracted from a linked AST names whichever unit its function
+ * was written in, and a scop extracted from one source file names that
+ * file.  A loc that names no file has nothing to print from and says so.
  */
 __isl_give isl_printer *pet_scop_print_original(struct pet_scop *scop,
 	__isl_take isl_printer *p)
 {
-	struct pet_scop_ext *ext = (struct pet_scop_ext *) scop;
 	FILE *output;
+	FILE *input;
+	const char *filename;
 	unsigned start, end;
+	int r;
 
 	if (!scop || !p)
 		return isl_printer_free(p);
 
-	if (!ext->input)
+	filename = pet_loc_get_filename(scop->loc);
+	if (!filename)
 		isl_die(isl_printer_get_ctx(p), isl_error_invalid,
 			"no input file stored in scop",
 			return isl_printer_free(p));
@@ -3481,9 +3468,16 @@ __isl_give isl_printer *pet_scop_print_original(struct pet_scop *scop,
 	if (!output)
 		return isl_printer_free(p);
 
+	input = fopen(filename, "r");
+	if (!input)
+		isl_die(isl_printer_get_ctx(p), isl_error_invalid,
+			"cannot open input file", return isl_printer_free(p));
+
 	start = pet_loc_get_start(scop->loc);
 	end = pet_loc_get_end(scop->loc);
-	if (copy(ext->input, output, start, end) < 0)
+	r = copy(input, output, start, end);
+	fclose(input);
+	if (r < 0)
 		return isl_printer_free(p);
 
 	return p;

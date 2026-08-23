@@ -1299,7 +1299,7 @@ static struct pet_stmt *extract_stmt(isl_ctx *ctx, yaml_document_t *document,
 
 	if (!indent)
 		indent = strdup("");
-	stmt->loc = pet_loc_alloc(ctx, start, end, line, indent);
+	stmt->loc = pet_loc_alloc(ctx, start, end, line, indent, NULL);
 	if (!stmt->loc)
 		return pet_stmt_free(stmt);
 

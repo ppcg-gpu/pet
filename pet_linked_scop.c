@@ -21,6 +21,7 @@ struct options {
 	struct pet_options	*pet;
 	char			*function;
 	int			map;
+	int			foreach;
 };
 
 ISL_ARGS_START(struct options, options_args)
@@ -31,9 +32,21 @@ ISL_ARG_STR(struct options, function, 0, "function", "name", NULL,
 ISL_ARG_BOOL(struct options, map, 0, "map", 0,
 	"go over every function and say where each scop ended, "
 	"rather than extracting one")
+ISL_ARG_BOOL(struct options, foreach, 0, "foreach", 0,
+	"go over every function with pet_linked_ast_foreach_scop, "
+	"emitting each scop found")
 ISL_ARGS_END
 
 ISL_ARG_DEF(options, struct options, options_args)
+
+/* Callback for pet_linked_ast_foreach_scop: emit the scop and a separator. */
+static int emit_scop(__isl_take pet_scop *scop, void *user)
+{
+	pet_scop_emit(stdout, scop);
+	pet_scop_free(scop);
+	printf("---\n");
+	return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -101,6 +114,15 @@ int main(int argc, char **argv)
 	 */
 	if (options->map) {
 		int r = pet_linked_ast_map(ctx, linked, stdout);
+
+		pet_ast_link_free(linked);
+		isl_ctx_free(ctx);
+
+		return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+	}
+
+	if (options->foreach) {
+		int r = pet_linked_ast_foreach_scop(ctx, linked, emit_scop, NULL);
 
 		pet_ast_link_free(linked);
 		isl_ctx_free(ctx);

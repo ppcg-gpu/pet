@@ -99,7 +99,6 @@ struct pet_scop *pet_scop_update_start_end_from_loc(struct pet_scop *scop,
 	__isl_keep pet_loc *loc);
 struct pet_scop *pet_scop_set_loc(struct pet_scop *scop,
 	__isl_take pet_loc *loc);
-struct pet_scop *pet_scop_set_input_file(struct pet_scop *scop, FILE *input);
 
 #if defined(__cplusplus)
 }

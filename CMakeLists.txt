@@ -160,6 +160,7 @@ target_link_libraries(pet_ast_link PRIVATE clang_feature_tests)
 add_pet_program(pet_codegen pet_codegen.c)
 add_pet_program(pet_check_code pet_check_code.c)
 add_pet_program(pet_loopback pet_loopback.c)
+add_pet_program(pet_print_original pet_print_original.c)
 
 # Installation
 install(TARGETS pet
@@ -385,6 +386,32 @@ add_test(NAME PET_LinkedScop_map_refusals
         -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/map_refusals
         "-DUNITS=unit_a.c|unit_b.c"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMapRefusalsTest.cmake
+)
+
+# Go over every function of a linked AST and extract a scop from each,
+# which is the whole point of pet_linked_ast_foreach_scop.  The app_blur
+# corpus linked from both units has two functions, so two scops must come
+# back.
+add_test(NAME PET_LinkedScop_foreach_blur
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DEXTRACTOR=$<TARGET_FILE:pet_linked_scop>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/app_blur
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/foreach_blur
+        "-DUNITS=blur.c|blur_row.c"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLinkedScopForeachTest.cmake
+)
+
+# Printing the original code of every scop in place of the scop gives
+# the file back exactly as it was written.  This is the only thing that
+# asks pet_scop_print_original to read a region back from the file its
+# pet_loc names.
+add_test(NAME PET_PrintOriginal
+    COMMAND ${CMAKE_COMMAND}
+        -DTOOL=$<TARGET_FILE:pet_print_original>
+        -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/print_original/region.c
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/print_original
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPrintOriginalTest.cmake
 )
 
 #--------------------------------------------------------------------

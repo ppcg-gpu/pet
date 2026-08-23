@@ -1958,7 +1958,17 @@ __isl_give pet_loc *PetScan::construct_pet_loc(SourceRange range,
 		loc = PP.getLocForEndOfToken(loc);
 	end = getExpansionOffset(SM, loc);
 
-	return pet_loc_alloc(ctx, start, end, line, indent);
+	/* The name of the file this region was written in, so that the
+	 * region can be printed back from it.  A StringRef is not
+	 * NUL-terminated by contract, so it is turned into a std::string
+	 * that outlives the call rather than handed over as it is.  A
+	 * location that names no file leaves the loc without one, and
+	 * printing the original text of such a region fails loudly.
+	 */
+	std::string filename = SM.getFilename(loc).str();
+
+	return pet_loc_alloc(ctx, start, end, line, indent,
+				filename.empty() ? NULL : filename.c_str());
 }
 
 /* Convert a top-level pet_expr to an expression pet_tree.

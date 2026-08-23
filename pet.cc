@@ -2031,6 +2031,61 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	return 0;
 }
 
+/* Go over every function of "linked" a scop could be entered from,
+ * extract a scop from each one, and call "fn" on each scop found.
+ *
+ * If "fn" returns a non-zero value, iteration stops, remaining
+ * entries are skipped, and that value is returned.
+ *
+ * Nothing is kept beyond what "fn" decides to hold on to.
+ * The callback takes ownership of the scop.
+ */
+int pet_linked_ast_foreach_scop(isl_ctx *ctx, struct pet_linked_ast *linked,
+	int (*fn)(__isl_take pet_scop *scop, void *user), void *user)
+{
+	pet_options *options;
+	std::vector<Independent> independent;
+
+	options = isl_ctx_peek_pet_options(ctx);
+	if (!options)
+		isl_die(ctx, isl_error_invalid, "no pet options found",
+			return -1);
+	if (!options->autodetect)
+		isl_die(ctx, isl_error_unsupported,
+			"iterating a linked AST requires autodetect",
+			return -1);
+
+	ASTContext &ast_context = pet_linked_ast_context(linked);
+	Preprocessor &PP = pet_linked_ast_preprocessor(linked);
+
+	static ASTConsumer nothing_reads_it;
+	pet_linked_ast_finish(linked, nothing_reads_it);
+
+	isl_union_map *vb =
+		isl_union_map_empty(isl_space_params_alloc(ctx, 0));
+	std::vector<FunctionDecl *> entries =
+		entries_of(ast_context.getTranslationUnitDecl(), NULL);
+
+	int r = 0;
+
+	for (FunctionDecl *body : entries) {
+		ScopLoc loc;
+		PetScan ps(PP, ast_context, body, loc, options,
+			isl_union_map_copy(vb), independent);
+		pet_scop *scop = ps.scan(body);
+		if (!scop)
+			continue;
+
+		r = fn(scop, user);
+		if (r != 0)
+			break;
+	}
+
+	isl_union_map_free(vb);
+
+	return r;
+}
+
 /* Serialise the AST of the C source file "input" to the file "output".
  *
  * The options are the ones the context was given, so that the unit is
@@ -2148,10 +2203,6 @@ struct pet_transform_data {
  * the original code.
  * Finally, we keep track of the end of "scop" so that we can
  * continue copying when we find the next scop.
- *
- * Before calling data->transform, we store a pointer to the original
- * input file in the extended scop in case the user wants to call
- * pet_scop_print_original from the callback.
  */
 static isl_stat pet_transform(struct pet_scop *scop, void *user)
 {
@@ -2164,7 +2215,6 @@ static isl_stat pet_transform(struct pet_scop *scop, void *user)
 	if (copy(data->in, data->out, data->end, start) < 0)
 		goto error;
 	data->end = pet_loc_get_end(scop->loc);
-	scop = pet_scop_set_input_file(scop, data->in);
 	data->p = isl_printer_set_indent_prefix(data->p,
 					pet_loc_get_indent(scop->loc));
 	data->p = data->transform(data->p, scop, data->user);

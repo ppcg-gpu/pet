@@ -60,6 +60,9 @@ unsigned pet_loc_get_end(__isl_keep pet_loc *loc);
 int pet_loc_get_line(__isl_keep pet_loc *loc);
 /* Return the indentation of the "loc" region. */
 __isl_keep const char *pet_loc_get_indent(__isl_keep pet_loc *loc);
+/* Return the filename of the source file containing "loc",
+   or NULL if no source file is known. */
+__isl_keep const char *pet_loc_get_filename(__isl_keep pet_loc *loc);
 
 enum pet_expr_type {
 	pet_expr_error = -1,
@@ -574,6 +577,16 @@ __isl_give pet_scop *pet_scop_extract_from_linked_ast(isl_ctx *ctx,
 int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	FILE *out);
 
+/* Go over every function of a linked AST that a scop could be entered
+ * from, extract a scop from each one, and call "fn" on each scop found.
+ * If "fn" returns a non-zero value, iteration stops and that value is
+ * returned.  Requires the autodetect option.
+ *
+ * Returns 0 on success and -1 on error.
+ */
+int pet_linked_ast_foreach_scop(isl_ctx *ctx, struct pet_linked_ast *linked,
+	int (*fn)(__isl_take pet_scop *scop, void *user), void *user);
+
 /* Extract a pet_scop from a C source file.
  * If function is not NULL, then the pet_scop is extracted from
  * a function with that name.
@@ -588,8 +601,8 @@ __isl_give pet_scop *pet_scop_extract_from_C_source(isl_ctx *ctx,
 int pet_transform_C_source(isl_ctx *ctx, const char *input, FILE *output,
 	__isl_give isl_printer *(*transform)(__isl_take isl_printer *p,
 		__isl_take pet_scop *scop, void *user), void *user);
-/* Given a scop and a printer passed to a pet_transform_C_source callback,
- * print the original corresponding code to the printer.
+/* Print the code a scop was extracted from to the printer, read back
+ * from the file its location names.  The printer must print to a file.
  */
 __isl_give isl_printer *pet_scop_print_original(__isl_keep pet_scop *scop,
 	__isl_take isl_printer *p);
