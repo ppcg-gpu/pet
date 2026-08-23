@@ -152,7 +152,14 @@ struct pet_walk {
 	/* How many bodies have been put in place at all. */
 	int inlined_calls;
 
-	pet_walk() : summary_depth(0), inline_depth(0), inlined_calls(0) {}
+	/* Per-guard firing counters for already_inlining diagnostics. */
+	int n_no_return;
+	int n_depth;
+	int n_calls;
+	int n_cycle;
+
+	pet_walk() : summary_depth(0), inline_depth(0), inlined_calls(0),
+		n_no_return(0), n_depth(0), n_calls(0), n_cycle(0) {}
 };
 
 struct PetScan {
@@ -293,14 +300,22 @@ struct PetScan {
 	bool already_inlining(clang::FunctionDecl *fd) {
 		const char *why = NULL;
 
-		if (fd->isNoReturn())
+		if (fd->isNoReturn()) {
+			walk->n_no_return++;
 			why = "it does not return";
-		else if (walk->inline_depth >= max_inline_depth)
+		}
+		else if (walk->inline_depth >= max_inline_depth) {
+			walk->n_depth++;
 			why = "bodies are not followed that deep";
-		else if (walk->inlined_calls >= max_inlined_calls)
+		}
+		else if (walk->inlined_calls >= max_inlined_calls) {
+			walk->n_calls++;
 			why = "enough bodies have been put in place already";
-		else if (walk->inlining.find(fd) != walk->inlining.end())
+		}
+		else if (walk->inlining.find(fd) != walk->inlining.end()) {
+			walk->n_cycle++;
 			why = "it is already being put in place";
+		}
 		else
 			return false;
 

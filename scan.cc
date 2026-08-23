@@ -229,6 +229,9 @@ PetScan::~PetScan()
 
 	isl_id_to_pet_expr_free(id_size);
 	isl_union_map_free(value_bounds);
+
+	fprintf(stderr, "pet_walk guard counters: noreturn=%d depth=%d calls=%d cycle=%d\n",
+		own_walk.n_no_return, own_walk.n_depth, own_walk.n_calls, own_walk.n_cycle);
 }
 
 /* Remember where a scop stopped and on what.
