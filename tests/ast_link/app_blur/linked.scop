@@ -23,11 +23,11 @@ arrays:
   element_size: 4
   declared: 1
 - context: '{  :  }'
-  extent: '{ in[i0] : i0 >= 0 }'
+  extent: '{ in[i0, i1] : i0 >= 0 and 0 <= i1 <= 63 }'
   element_type: float
   element_size: 4
 - context: '{  :  }'
-  extent: '{ out[i0] : i0 >= 0 }'
+  extent: '{ out[i0, i1] : i0 >= 0 and 0 <= i1 <= 63 }'
   element_type: float
   element_size: 4
 statements:
@@ -102,7 +102,7 @@ statements:
       operation: =
       arguments:
       - type: access
-        index: '{ S_6[i, j] -> out[(j)] }'
+        index: '{ S_6[i, j] -> out[(i), (j)] }'
         reference: __pet_ref_6
         read: 0
         write: 1
@@ -116,17 +116,17 @@ statements:
             operation: +
             arguments:
             - type: access
-              index: '{ S_6[i, j] -> in[(-1 + j)] }'
+              index: '{ S_6[i, j] -> in[(i), (-1 + j)] }'
               reference: __pet_ref_7
               read: 1
               write: 0
             - type: access
-              index: '{ S_6[i, j] -> in[(j)] }'
+              index: '{ S_6[i, j] -> in[(i), (j)] }'
               reference: __pet_ref_8
               read: 1
               write: 0
           - type: access
-            index: '{ S_6[i, j] -> in[(1 + j)] }'
+            index: '{ S_6[i, j] -> in[(i), (1 + j)] }'
             reference: __pet_ref_9
             read: 1
             write: 0

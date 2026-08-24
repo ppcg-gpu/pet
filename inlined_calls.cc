@@ -122,10 +122,24 @@ bool pet_inlined_calls::VisitCallExpr(clang::CallExpr *call)
  * the mapping from call expressions to return variables for
  * previously extracted inlined functions in order to handle
  * nested calls.
+ *
+ * The declaration used is the one the body belongs to, which is the one
+ * VisitCallExpr weighed when it decided this call could be put in place
+ * at all.  A call names whichever declaration was visible where it was
+ * written, and that is a different object from the one carrying the
+ * body whenever the two were written apart -- which, after a link, is
+ * every call that crosses a unit.  The two declare parameters of the
+ * same names and types and none of the same identity, so binding the
+ * arguments to the named declaration's parameters binds them to
+ * variables the body never mentions: the body goes on naming its own,
+ * those names resolve against whatever the caller happens to have, and
+ * a body whose parameter had to be renamed for clashing with the caller
+ * reads the caller's variable instead of its argument.
  */
 void pet_inlined_calls::add(CallExpr *call)
 {
-	FunctionDecl *fd = pet_clang_direct_callee(call);
+	FunctionDecl *fd = pet_clang_find_function_decl_with_body(
+					pet_clang_direct_callee(call));
 	QualType qt;
 	isl_id *id = NULL;
 

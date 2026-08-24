@@ -209,7 +209,7 @@ statements:
           read: 1
           write: 0
         - type: access
-          index: '{ S_7[i] -> f[] }'
+          index: '{ S_7[i] -> f_0[] }'
           reference: __pet_ref_14
           read: 1
           write: 0
