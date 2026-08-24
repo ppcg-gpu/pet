@@ -21,6 +21,74 @@ Applied to LLVM **22.1.5** (tag `llvmorg-22.1.5`, commit
     patch -p1 < .../ThirdParty/pet/llvm-patches/0001-ast-importer-for-linking.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0002-source-manager-total-order.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0003-structural-equivalence-across-languages.patch
+    patch -p1 < .../ThirdParty/pet/llvm-patches/0004-import-float16-as-float16.patch
+
+## 0004-import-float16-as-float16.patch
+
+`BuiltinTypes.def` lists the builtin `Float16` as naming the singleton
+`HalfTy`:
+
+    FLOATING_TYPE(Float16, HalfTy)
+
+`_Float16` and `__fp16` are two types.  `ASTContext` holds a `Float16Ty`
+of its own and initialises it as `BuiltinType::Float16`, so the two are
+kept apart everywhere else; it is this one table entry that conflates
+them.  `VisitBuiltinType` imports builtin types by expanding that table,
+so an imported `_Float16` comes back as `__fp16`.
+
+That alone is only a spelling.  What makes it a refusal is what the
+target already holds.  Where a unit of the target's own declares the
+same thing, it is `_Float16` there, having been read rather than
+imported; the arriving declaration is `__fp16`; the two are weighed
+against each other and are not the same type.  The typedef is refused,
+and every declaration that mentions it goes with it.
+
+The patch answers a floating type with the singleton named after its
+`Id` rather than with the one the table gives.  Seven of the eight
+floating entries already name `Id##Ty` -- `Half` is `HalfTy`, `Float` is
+`FloatTy`, and so on -- so this changes the `Float16` case and no other.
+`BuiltinTypes.def` is left alone: `HalfTy` may be wanted there by the
+other places that expand it.
+
+### What it was measured against
+
+`llvm-patches/../../../scratch/ppcg/repro-float16` holds the case: two
+units include a header declaring
+
+    typedef _Float16 v32 __attribute__((__vector_size__(64), __aligned__(64)));
+
+with a `static __inline__` function returning it, the way `immintrin.h`
+is written, and both are linked into a third unit that never mentions
+the type.
+
+Three control arms say what the case is about, and each of them links
+cleanly: the same shape written with `float`, the same three units with
+the target written in C, and the same three units with a carrier first
+rather than the target.  The last of these is what identifies the
+condition -- the target of a link is its first unit, so with a carrier
+first the type is present natively and everything is weighed against
+that, while with the target first every copy arrives through the import.
+
+The refusals grow by four for each carrier added -- 0, 4, 8 -- which is
+the shape of one target copy being compared against each arriving one.
+Writing the carriers with `__fp16` instead makes it link, which closes
+the loop from the other side: the mismatch is exactly the source's
+`_Float16` against the target's imported `__fp16`.
+
+Over llama-dspark, emitted with the whole SIMD group off, this is the
+whole of what 52 units refuse.  `immintrin.h` is included by
+`ggml-cpu-impl.h` under `#if defined(__SSE__)`, which is baseline on
+x86-64 and no `GGML_*` option removes, so the AVX-512 FP16 declarations
+are in every C++ unit of `ggml-cpu` whether or not the instructions may
+be used.
+
+### Open
+
+Why a target written in C takes a different path is not explained.  It
+does not refuse, and it resolves more calls rather than fewer -- two
+against the C++ target's one -- so it is not doing less.  The relaxation
+at `ASTContext.cpp:10538`, which treats `Float16` and `Half` as
+compatible, is guarded by `getLangOpts().OpenCL` and is not the answer.
 
 ## 0003-structural-equivalence-across-languages.patch
 

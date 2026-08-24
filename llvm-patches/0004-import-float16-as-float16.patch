@@ -1,0 +1,23 @@
+--- a/clang/lib/AST/ASTImporter.cpp
++++ b/clang/lib/AST/ASTImporter.cpp
+@@ -1406,6 +1406,20 @@
+ #define SHARED_SINGLETON_TYPE(Expansion)
+ #define BUILTIN_TYPE(Id, SingletonId) \
+   case BuiltinType::Id: return Importer.getToContext().SingletonId;
++  // A floating type is answered with the singleton named after it rather
++  // than with the one BuiltinTypes.def gives, which differs for exactly
++  // one of the eight: Float16 is listed there as HalfTy.  _Float16 and
++  // __fp16 are two types, and importing the first as the second means a
++  // declaration written with _Float16 arrives as one written with
++  // __fp16.  Where the target already holds the same declaration read
++  // from a unit of its own it is still _Float16 there, the two are
++  // weighed against each other, they are not the same type, and the
++  // declaration is refused along with everything that mentions it.
++  //
++  // The other seven name Id##Ty already -- Half is HalfTy, Float is
++  // FloatTy, and so on -- so this changes that one case and no other.
++#define FLOATING_TYPE(Id, SingletonId) \
++  case BuiltinType::Id: return Importer.getToContext().Id##Ty;
+ #include "clang/AST/BuiltinTypes.def"
+ 
+   // FIXME: for Char16, Char32, and NullPtr, make sure that the "to"
