@@ -82,6 +82,38 @@ x86-64 and no `GGML_*` option removes, so the AVX-512 FP16 declarations
 are in every C++ unit of `ggml-cpu` whether or not the instructions may
 be used.
 
+## Two things about measuring a link, both learned the slow way
+
+**The order of the units is part of the measurement.**  The first unit
+is the one the rest are linked into, so it decides what is read and what
+is imported, and a refusal that needs an imported declaration to be
+weighed against a read one appears or does not appear with the order.
+The same 52 units of llama-dspark refuse 238 in bytewise order and 249
+in the order the shell sorts them in -- and `ls | sort` is not bytewise,
+it follows the locale.  Two ladders built the two ways disagreed about
+which unit brought the refusals and about how many there were at every
+rung, which cost an afternoon before the cause was found.  The order
+belongs in the corpus list, not in whoever runs it:
+`tests/whole-program/llama-dspark.units` holds it.
+
+**A corpus is not always one program.**  llama-dspark has two model
+implementations, `engine/src/models/deepseek4.cpp` and
+`engine/src/models/dflash.cpp`, and each defines
+`llama_model::load_arch_hparams`, `save_arch_hparams` and
+`load_arch_tensors`.  A build takes one of them; both together are two
+definitions of one entity, which no linker accepts.  Linked as a pair
+they refuse 238 declarations where either alone refuses none.  So 52
+units refuse and 51 do not, and the 51 are the program.
+
+### Open
+
+The link reports that pair the same way it reports a defect of its own:
+as refusals, by name, with the same counts and the same exit code.  They
+are not the same thing -- one is the link answering a question correctly
+that should not have been asked, the other is the link failing to answer
+one that should.  Told apart they would have cost minutes rather than
+hours.  Nothing in the output distinguishes them today.
+
 ### Open
 
 Why a target written in C takes a different path is not explained.  It

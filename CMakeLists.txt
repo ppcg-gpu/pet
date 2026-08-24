@@ -284,6 +284,26 @@ add_test(NAME PET_AstLink_lazy
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
 )
 
+# A class template with four specialisations, seen alike by two units.
+# Each specialisation is a record of its own and every one of them is
+# called after the template, so counting records by the bare name makes
+# these four look like four records of one name -- which is what a link
+# that failed to make two structs one would also look like.  Counted
+# under the name each would be written with, arguments included, they
+# are four records and the report says four.
+add_test(NAME PET_AstLink_template_records
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DLINKER=$<TARGET_FILE:pet_ast_link>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/template_records
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/template_records
+        -DSUFFIX=.cpp
+        -DSUMMARY_ONLY=ON
+        "-DUNITS=width_a|width_b"
+        -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/template_records/expected.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
+)
+
 add_ast_link_test(conflict conflict "incompatible_a;incompatible_b"
     expected.txt EXPECT_FAIL)
 
