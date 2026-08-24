@@ -191,6 +191,31 @@ struct pet_walk {
 	int n_too_many_stmts;
 	int n_cycle;
 
+	/* What each DeclContext calls the things it holds, worked out
+	 * once per context and kept for the whole walk.
+	 *
+	 * Asking whether a name is taken means asking every enclosing
+	 * context, and the outermost of them is the translation unit.
+	 * Read from one file that is a few thousand declarations; read
+	 * from a link of a program it is every declaration of every unit,
+	 * and the question is asked once for every argument of every
+	 * body put in place of a call.  It belongs to the walk rather
+	 * than to a scan because a body is read by a scan of its own,
+	 * and a cache belonging to each scan is built again from nothing
+	 * for every body inlined.
+	 *
+	 * "first" is the one declaration of that name where there is
+	 * only one, so that a name can still be found free for the
+	 * declaration that already carries it; "many" holds the names
+	 * that more than one declaration carries, which no single
+	 * declaration can be excused from.
+	 */
+	struct context_names {
+		std::map<std::string, clang::Decl *> first;
+		std::set<std::string> many;
+	};
+	std::map<clang::DeclContext *, context_names> names_of;
+
 	pet_walk() : summary_depth(0), inline_depth(0), total_stmts(0),
 		n_ret(0), n_arg(0), n_no_return(0), n_depth(0),
 		n_too_many_stmts(0), n_cycle(0) {}

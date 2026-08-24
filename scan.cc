@@ -1756,34 +1756,69 @@ void PetScan::add_new_used_names(const std::set<std::string> &names)
 	}
 }
 
+/* What does "DC" call the things it holds?
+ *
+ * Worked out once and kept on the walk, since every scan of every body
+ * put in place of a call asks the same of the same contexts.
+ */
+static const struct pet_walk::context_names &names_of_context(
+	struct pet_walk *walk, DeclContext *DC)
+{
+	std::map<DeclContext *, struct pet_walk::context_names>::iterator it;
+	DeclContext::decl_iterator d;
+
+	it = walk->names_of.find(DC);
+	if (it != walk->names_of.end())
+		return it->second;
+
+	struct pet_walk::context_names &names = walk->names_of[DC];
+
+	for (d = DC->decls_begin(); d != DC->decls_end(); ++d) {
+		NamedDecl *named = dyn_cast<NamedDecl>(*d);
+
+		if (!named)
+			continue;
+		std::string name = named->getNameAsString();
+		if (names.first.count(name))
+			names.many.insert(name);
+		else
+			names.first[name] = *d;
+	}
+
+	return names;
+}
+
 /* Is the name "name" used in any declaration other than "decl"?
  *
  * If the name was found to be in use before, the consider it to be in use.
  * Otherwise, check the DeclContext of the function containing the scop
  * as well as all ancestors of this DeclContext for declarations
  * other than "decl" that declare something called "name".
+ *
+ * What each context calls the things it holds is asked of the walk,
+ * which works it out once.  Walking the declarations here instead is
+ * a walk of the translation unit, and after a link that is every
+ * declaration of every unit: profiled over 49 units of llama-dspark,
+ * the whole of the run sat in this function, reached from
+ * generate_new_name for the arguments of bodies being put in place.
  */
 bool PetScan::name_in_use(const string &name, Decl *decl)
 {
 	DeclContext *DC;
-	DeclContext::decl_iterator it;
 
 	if (used_names.find(name) != used_names.end())
 		return true;
 
 	for (DC = decl_context; DC; DC = DC->getParent()) {
-		for (it = DC->decls_begin(); it != DC->decls_end(); ++it) {
-			Decl *D = *it;
-			NamedDecl *named;
+		const struct pet_walk::context_names &names =
+					names_of_context(walk, DC);
+		std::map<std::string, Decl *>::const_iterator it;
 
-			if (D == decl)
-				continue;
-			if (!isa<NamedDecl>(D))
-				continue;
-			named = cast<NamedDecl>(D);
-			if (named->getNameAsString() == name)
-				return true;
-		}
+		if (names.many.find(name) != names.many.end())
+			return true;
+		it = names.first.find(name);
+		if (it != names.first.end() && it->second != decl)
+			return true;
 	}
 
 	return false;
