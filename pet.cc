@@ -1074,10 +1074,8 @@ static TargetInfo *create_target_info(CompilerInstance *Clang,
 #ifdef CREATEDIAGNOSTICS_TAKES_ARG
 
 static void create_diagnostics(CompilerInstance *Clang) {
-    // Use a static VFS to ensure it exists for the lifetime of the program
-    // This prevents the VFS from being destroyed when this function returns
-    static IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = llvm::vfs::getRealFileSystem();
-    Clang->createDiagnostics(*VFS, nullptr, /*ShouldOwnClient=*/false);
+	Clang->createDiagnostics(Clang->getVirtualFileSystem(), nullptr,
+				/*ShouldOwnClient=*/false);
 }
 
 #else
@@ -1356,9 +1354,23 @@ static void set_implicit_function_declaration_no_error(DiagnosticsEngine &Diags)
  *
  * The engine refers to the diagnostic options of the compiler instance,
  * so it has to be created again whenever those are replaced.
+ *
+ * The instance is given a file system of its own first, which is the
+ * order clang's own FrontendAction uses and what everything after this
+ * asks the instance for: createDiagnostics reaches for it to hand to the
+ * engine it makes, and createFileManager takes it and asserts that it is
+ * there.  An instance is not born with one, whether or not it was handed
+ * an invocation.
+ *
+ * A file system used to be made beside the instance and handed only to
+ * the engine, kept alive by being static -- which answered how long it
+ * lives and not whose it is, and left the instance holding none.  Only a
+ * clang built with assertions says so; a release build reads through the
+ * empty pointer instead.
  */
 static void create_configured_diagnostics(CompilerInstance *Clang)
 {
+	Clang->createVirtualFileSystem();
 	create_diagnostics(Clang);
 	DiagnosticsEngine &Diags = Clang->getDiagnostics();
 	Diags.setSuppressSystemWarnings(true);

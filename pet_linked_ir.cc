@@ -94,6 +94,14 @@ static CompilerInstance *configure(ASTContext &ctx)
 			ctx.getTargetInfo().getTriple().str();
 
 	ci = new CompilerInstance(invocation);
+	/* The instance is given a file system of its own first.  Nothing
+	 * here opens a file, but createDiagnostics reaches for the
+	 * instance's file system to hand to the engine it makes, and an
+	 * instance that was never given one holds nothing to reach for:
+	 * the constructor does not make one, whether or not it is handed
+	 * an invocation.
+	 */
+	ci->createVirtualFileSystem();
 	ci->createDiagnostics(new plain_diagnostics(),
 				/*ShouldOwnClient=*/true);
 	/* The linked context was read with a target of its own and carries
