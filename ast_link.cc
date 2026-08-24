@@ -914,18 +914,37 @@ private:
 			return;
 
 		bool stray = false;
+		/* The record's fields are gathered at most once and then
+		 * asked of as a set.  Walking them once per initialiser
+		 * instead costs the product of the two, and over a linked
+		 * C++ engine, where a standard library container brings
+		 * constructors and fields in numbers that both grow with
+		 * the units linked, that product is the whole cost of
+		 * linking: measured at 29 units of llama-dspark, 99.5 per
+		 * cent of the time under this loop and no end to it after
+		 * fifty minutes, where 24 units took 13 seconds.
+		 *
+		 * Gathering them is put off until an initialiser is found
+		 * that names a member, and not done at the top.  Asking a
+		 * record for its fields is what makes it read them from
+		 * the unit they were serialised in, and a constructor
+		 * that names no member -- which most of them are -- gave
+		 * no reason to read anything.  Reading them for every
+		 * constructor is slower than the product this replaces.
+		 */
+		bool gathered = false;
+		llvm::SmallPtrSet<const FieldDecl *, 16> fields;
 		for (auto *init : to_ctor->inits()) {
 			FieldDecl *f = init->getMember();
 
 			if (!f)
 				continue;
-			bool there = false;
-			for (const FieldDecl *g : def->fields())
-				if (g == f) {
-					there = true;
-					break;
-				}
-			if (!there) {
+			if (!gathered) {
+				for (const FieldDecl *g : def->fields())
+					fields.insert(g);
+				gathered = true;
+			}
+			if (!fields.count(f)) {
 				stray = true;
 				stray_ctors++;
 				break;
