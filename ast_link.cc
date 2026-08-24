@@ -145,6 +145,18 @@ struct pet_linked_ast {
 	 * the one everything was linked into, in the order it came.
 	 */
 	std::vector<Decl *> imported;
+	/* The variables an imported unit left tentative.
+	 *
+	 * A variable written in C without an initialiser is a tentative
+	 * definition, and it is the definition unless something else in
+	 * the unit claims the name.  The linked context is C++ -- one of
+	 * the units decides that and it is kept -- and C++ has no such
+	 * thing: a redeclaration without an initialiser is a mention
+	 * there, whatever it was where it was written.  So the ones that
+	 * were tentative are written down as they come, and said to be
+	 * definitions once the unit is finished.
+	 */
+	std::vector<VarDecl *> tentative;
 	/* The analysis the finishing is run under.
 	 *
 	 * It outlives the finishing, because what the finishing produced
@@ -1535,69 +1547,6 @@ static bool worth_announcing(Decl *d)
  * ParseAST hands the unit over when it is done, so what consumes it has
  * been given it by the time this returns.
  */
-/* Say of every tentative definition in "dc" that it is a definition.
- *
- * Written in C without an initialiser -- "float table[65536];" at the
- * outermost level -- a variable is a tentative definition, and what
- * makes it the real one is the end of the unit arriving with nothing
- * else claiming the name.  Sema does that in ActOnEndOfTranslationUnit
- * over a list it fills while parsing.  The units linked in here were
- * parsed by another Sema in another process, so their tentative
- * definitions are in no list this one holds and the end of this unit
- * passes over them.
- *
- * What comes out then declares them without defining them.  ggml's
- * three lookup tables -- ggml_table_f32_f16 and the two beside it, a
- * quarter of a megabyte that ggml_cpu_init fills and every f16
- * conversion reads -- were "external global" in a module holding every
- * function of the engine, and nothing said so until a program was
- * linked against it and the linker asked where they were.
- *
- * The extern "C" blocks are gone into as well as the outermost level.
- * A C unit's declarations are put in one of those when they are brought
- * into a C++ unit, which is where every one of a linked engine's C
- * variables is, and looking only at the top finds none of them.
- */
-static void complete_tentative_definitions(ASTContext &ctx, DeclContext *dc,
-	ASTConsumer &consumer)
-{
-	for (Decl *d : dc->decls()) {
-		if (auto *ls = dyn_cast<LinkageSpecDecl>(d)) {
-			complete_tentative_definitions(ctx, ls, consumer);
-			continue;
-		}
-
-		auto *vd = dyn_cast<VarDecl>(d);
-
-		if (!vd)
-			continue;
-		if (getenv("PET_LINK_WHY"))
-			fprintf(stderr, "the variable %s is %s, has %s "
-				"definition in its chain of %d, and lives "
-				"in %s\n", vd->getNameAsString().c_str(),
-				vd->isThisDeclarationADefinition(ctx) ==
-					VarDecl::Definition ? "a definition" :
-				vd->isThisDeclarationADefinition(ctx) ==
-					VarDecl::TentativeDefinition ?
-					"tentative" : "a mention",
-				vd->getDefinition() ? "a" : "no",
-				(int) std::distance(vd->redecls_begin(),
-						vd->redecls_end()),
-				cast<Decl>(vd->getDeclContext())
-					->getDeclKindName());
-		if (vd->isThisDeclarationADefinition(ctx) !=
-		    VarDecl::TentativeDefinition)
-			continue;
-		/* The one of the chain that stands for the definition, so
-		 * that a name written tentatively more than once is
-		 * defined once.
-		 */
-		if (vd->getActingDefinition() != vd)
-			continue;
-		consumer.CompleteTentativeDefinition(vd);
-	}
-}
-
 void pet_linked_ast_finish(struct pet_linked_ast *linked,
 	ASTConsumer &consumer)
 {
@@ -1663,9 +1612,25 @@ void pet_linked_ast_finish(struct pet_linked_ast *linked,
 
 	ParseAST(sema, /*PrintStats=*/false, /*SkipFunctionBodies=*/false);
 
-	ASTContext &ctx = target->getASTContext();
-	complete_tentative_definitions(ctx, ctx.getTranslationUnitDecl(),
-					consumer);
+	/* A variable an imported unit left tentative is a definition, and
+	 * the C++ context it arrived in has no word for one, so it is said
+	 * outright.  Sema settles tentative definitions at the end of a
+	 * unit over a list it fills while parsing; these were parsed by
+	 * another Sema in another process and are in no list of its own.
+	 *
+	 * Said after ParseAST, so that anything the finishing of the unit
+	 * defines has already been generated and a name defined there is
+	 * not defined twice.
+	 */
+	std::set<VarDecl *> said;
+
+	for (VarDecl *vd : linked->tentative) {
+		if (vd->getDefinition())
+			continue;
+		if (!said.insert(vd).second)
+			continue;
+		consumer.CompleteTentativeDefinition(vd);
+	}
 }
 
 /* Where the declarations brought from a unit read as C belong in a unit
@@ -1798,7 +1763,49 @@ static void carry_over_body(struct pet_linked_ast *linked,
 					ASTImportError::Unknown));
 }
 
-/* Offer every function of "dc" that carries a body to the link.
+/* Bring the definition of "vd" over, and say so if it did not come.
+ *
+ * The same shape as carry_over_body and for the same reason.  Importing
+ * a declaration of a variable does not bring a definition with it:
+ * where the target already holds the extern declaration a header gave
+ * it, an arriving definition is taken for that declaration and the
+ * chain in the target stays one long with no definition anywhere in it.
+ * A module made from such a link declares the variable and defines it
+ * nowhere -- three of ggml's lookup tables, a quarter of a megabyte
+ * that every f16 conversion reads, went missing that way while the link
+ * reported nothing refused.
+ */
+static void carry_over_definition(struct pet_linked_ast *linked,
+			link_importer &importer, VarDecl *vd)
+{
+	auto res = importer.Import(vd);
+
+	if (!res) {
+		note_refusal(linked, vd, res.takeError());
+		return;
+	}
+
+	auto *to_var = dyn_cast_or_null<VarDecl>(*res);
+
+	if (to_var && to_var->getDefinition())
+		return;
+
+	/* Tentative where it was written, and the context it arrived in
+	 * has no word for that, so it is remembered and said outright at
+	 * the end.
+	 */
+	if (to_var && vd->isThisDeclarationADefinition() ==
+			VarDecl::TentativeDefinition) {
+		linked->tentative.push_back(to_var);
+		return;
+	}
+
+	note_refusal(linked, vd, llvm::make_error<ASTImportError>(
+					ASTImportError::Unknown));
+}
+
+/* Offer every function of "dc" that carries a body to the link, and
+ * every variable it defines.
  *
  * The outermost level of a unit is walked declaration by declaration,
  * and that reaches a member of a record only through the record.  Where
@@ -1816,6 +1823,12 @@ static void carry_over_body(struct pet_linked_ast *linked,
  * body that fails to come leaves the declaration behind it and the
  * next ask for it succeeds.  A function that has a body here and none
  * there is a body the link lost, whatever the importer said.
+ *
+ * A variable this unit defines is asked for in the same way and for the
+ * same reason.  What a link is for is the definitions, and one that
+ * nothing asks for does not arrive: functions were asked and variables
+ * were not, which is the whole of why a link could lose every global
+ * variable of an imported unit and no function at all.
  */
 static void offer_bodies(struct pet_linked_ast *linked,
 			link_importer &importer, DeclContext *dc)
@@ -1824,6 +1837,19 @@ static void offer_bodies(struct pet_linked_ast *linked,
 		if (auto *fn = dyn_cast<FunctionDecl>(d))
 			if (fn->doesThisDeclarationHaveABody())
 				carry_over_body(linked, importer, fn);
+		/* A variable a template made is left alone.  Those are
+		 * materialised where they are used and a link that does
+		 * not use one has not lost it -- asking for them turns
+		 * six of libstdc++'s SFINAE helpers into refusals over
+		 * two units that share a vector.
+		 */
+		if (auto *vd = dyn_cast<VarDecl>(d))
+			if (vd->isFileVarDecl() &&
+			    vd->getTemplateSpecializationKind() ==
+				TSK_Undeclared &&
+			    vd->isThisDeclarationADefinition() !=
+				VarDecl::DeclarationOnly)
+				carry_over_definition(linked, importer, vd);
 		/* An instantiation of a template is in no context's list
 		 * of declarations: it hangs off the template it was made
 		 * from.
