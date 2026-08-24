@@ -2029,25 +2029,14 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 
 	for (long i = 0; i < n_worker; ++i) {
 		int status;
+
 		if (waitpid(child[i], &status, 0) < 0)
 			isl_die(ctx, isl_error_unknown,
 				"lost a part of the map", return -1);
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-			if (WIFSIGNALED(status))
-				fprintf(stderr, "%s:%d: a part of the map "
-					"died with signal %d (%s)\n",
-					__FILE__, __LINE__,
-					WTERMSIG(status),
-					strsignal(WTERMSIG(status)));
-			else if (WIFEXITED(status))
-				fprintf(stderr, "%s:%d: a part of the map "
-					"exited with status %d\n",
-					__FILE__, __LINE__,
-					WEXITSTATUS(status));
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 			isl_die(ctx, isl_error_unknown,
 				"a part of the map did not finish",
 				return -1);
-		}
 	}
 
 	isl_union_map_free(vb);

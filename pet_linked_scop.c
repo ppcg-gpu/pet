@@ -92,20 +92,16 @@ int main(int argc, char **argv)
 
 		fprintf(stderr, "%s: %d declaration(s) could not be linked\n",
 			argv[0], n);
+		/* Which ones, so that a link that did not come out whole
+		 * says what is missing from it rather than only how much.
+		 */
 		for (i = 0; i < n; ++i)
 			fprintf(stderr, "  %s: %s\n",
 				pet_linked_ast_refused(linked, i),
 				pet_linked_ast_refused_why(linked, i));
-		/* In --map mode, refused declarations are not fatal: the map
-		 * will report what it can find, and a CXXMethodDecl that
-		 * cannot cross into a C-only RecordDecl is a normal outcome
-		 * of mixed C and C++ AST linkage.
-		 */
-		if (!options->map) {
-			pet_ast_link_free(linked);
-			isl_ctx_free(ctx);
-			return EXIT_FAILURE;
-		}
+		pet_ast_link_free(linked);
+		isl_ctx_free(ctx);
+		return EXIT_FAILURE;
 	}
 
 	/* Asked for the map, every function is gone over and nothing is

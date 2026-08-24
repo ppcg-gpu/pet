@@ -381,21 +381,6 @@ add_linked_scop_test(blur_unlinked app_blur "blur" blur alone.scop)
 # times, which is not a scop any code can be generated from.
 add_linked_scop_test(merge_inlined merge "total;sum;scale" total total.scop)
 
-# A link that refuses part of what it was given: two units define the
-# same struct differently, so the struct and what is written in terms of
-# it cannot become one entity.  In --map mode a refusal is a thing to
-# report and not a thing to die on: the exit code is zero and the refused
-# names appear in stderr.
-add_test(NAME PET_LinkedScop_map_refusals
-    COMMAND ${CMAKE_COMMAND}
-        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
-        -DEXTRACTOR=$<TARGET_FILE:pet_linked_scop>
-        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/map_refusals
-        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_scop/map_refusals
-        "-DUNITS=unit_a.c|unit_b.c"
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMapRefusalsTest.cmake
-)
-
 # Go over every function of a linked AST and extract a scop from each,
 # which is the whole point of pet_linked_ast_foreach_scop.  The app_blur
 # corpus linked from both units has two functions, so two scops must come
