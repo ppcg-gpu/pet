@@ -1,0 +1,71 @@
+--- a/clang/lib/AST/ASTImporter.cpp
++++ b/clang/lib/AST/ASTImporter.cpp
+@@ -4101,6 +4101,40 @@
+     SmallVector<NamedDecl *, 4> ConflictingDecls;
+     unsigned IDNS = Decl::IDNS_Ordinary | Decl::IDNS_OrdinaryFriend;
+     auto FoundDecls = Importer.findDeclsInToCtx(DC, Name);
++
++    /* What the search for an existing declaration of this name turned
++     * up, asked about one name through PET_DECL_TRACE.
++     */
++    if (const char *want = getenv("PET_DECL_TRACE")) {
++      std::string nm = Name.getAsString();
++
++      if (nm.find(want) != std::string::npos) {
++        const FunctionDecl *def;
++        llvm::errs() << "importing " << nm << ": it "
++                     << (D->hasBody(def) ? "has" : "has no")
++                     << " a body; the search in "
++                     << cast<Decl>(DC)->getDeclKindName() << " found "
++                     << FoundDecls.size() << "; already imported: "
++                     << (Importer.GetAlreadyImportedOrNull(D) ? "yes" : "no")
++                     << "\n";
++        for (auto *F : FoundDecls) {
++          auto *FF = dyn_cast<FunctionDecl>(F);
++          const FunctionDecl *fdef;
++          llvm::errs() << "  found a " << F->getDeclKindName() << ", "
++                       << (FF && FF->hasBody(fdef) ? "with" : "without")
++                       << " a body, same visibility and linkage: "
++                       << (FF && hasSameVisibilityContextAndLinkage(FF, D)
++                               ? "yes" : "no")
++                       << ", same type: "
++                       << (FF && Importer.IsStructurallyEquivalent(
++                                       D->getType(), FF->getType())
++                               ? "yes" : "no")
++                       << "\n";
++        }
++        llvm::errs().flush();
++      }
++    }
++
+     for (auto *FoundDecl : FoundDecls) {
+       if (!FoundDecl->isInIdentifierNamespace(IDNS))
+         continue;
+@@ -4109,7 +4143,26 @@
+         if (!hasSameVisibilityContextAndLinkage(FoundFunction, D))
+           continue;
+ 
+-        if (IsStructuralMatch(D, FoundFunction)) {
++        bool Same = IsStructuralMatch(D, FoundFunction);
++
++        if (const char *want = getenv("PET_DECL_TRACE")) {
++          std::string nm = Name.getAsString();
++
++          if (nm.find(want) != std::string::npos) {
++            llvm::errs() << "  weighing " << nm << ": declarations match: "
++                         << (Same ? "yes" : "no")
++                         << "; the context speaks "
++                         << (Importer.getToContext().getLangOpts().CPlusPlus
++                                 ? "C++" : "C")
++                         << "; C linkage: arriving "
++                         << (D->isExternC() ? "yes" : "no") << ", found "
++                         << (FoundFunction->isExternC() ? "yes" : "no")
++                         << "\n";
++            llvm::errs().flush();
++          }
++        }
++
++        if (Same) {
+           if (Decl *Def = FindAndMapDefinition(D, FoundFunction))
+             return Def;
+           FoundByLookup = FoundFunction;

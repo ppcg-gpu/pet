@@ -13,15 +13,87 @@ outside clang cannot be made to compile -- it reaches into
 and `FriendDecl`'s trailing objects, all of them private -- and a copy
 under the same name would collide with the one clang exports.
 
-Applied to LLVM **22.1.5** (tag `llvmorg-22.1.5`, commit
-`b12b5102827affa51b9080ee9b5cc20dfa33a793`, tree
-`5ea218a153f4d2f815b8244eab3e4b4ba5e00e6c`):
+Applied to LLVM **22.1.8**: tag `llvmorg-22.1.8`, commit
+`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`.
+
+Which release it is was not a detail.  This said 22.1.5 for a while and
+the tree it was written from turned out to be 22.1.8, three patch
+releases later; on 22.1.5 pet does not read libstdc++ 16.1.1's headers
+at all -- twenty errors inside `bits/vector.tcc`, in a file the same
+clang compiles without complaint when it is asked as a compiler.  Nor
+was the earlier entry right about what the hashes were: it called the
+annotated tag object a commit.
+
+    git clone --depth 1 --branch llvmorg-22.1.8 \
+        https://github.com/llvm/llvm-project.git
+
+and then, from the top of that tree:
 
     cd llvm-project
     patch -p1 < .../ThirdParty/pet/llvm-patches/0001-ast-importer-for-linking.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0002-source-manager-total-order.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0003-structural-equivalence-across-languages.patch
     patch -p1 < .../ThirdParty/pet/llvm-patches/0004-import-float16-as-float16.patch
+
+## How it is built
+
+    cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_ENABLE_PROJECTS=clang \
+      -DLLVM_ENABLE_RTTI=ON \
+      -DLLVM_ENABLE_ASSERTIONS=ON \
+      -DLLVM_ABI_BREAKING_CHECKS=WITH_ASSERTS \
+      -DLLVM_TARGETS_TO_BUILD=X86
+    ninja -C build libclang-cpp.so libclang.so clang llvm-config
+
+`LLVM_ENABLE_RTTI=ON` is not optional: pet is compiled with RTTI and
+will not link against a clang built without it -- "undefined reference
+to typeinfo for clang::ASTImporter" and a hundred like it.
+
+The assertions are not optional either, in the sense that they are what
+finds things.  Two defects were caught by them and by nothing else: a
+compiler instance that was never given a file system, which a release
+clang reads through as a null pointer, and an `llvm::Expected` checked
+with `assert` -- which is to say not checked at all once `NDEBUG` is on,
+and which `LLVM_ABI_BREAKING_CHECKS` aborts on before the tool reads a
+line.
+
+## Four assertions that a linked AST does not satisfy
+
+The tree this was developed against carries five files that are in no
+patch.  Four of them turn an assertion of clang's into a printed line or
+remove it outright, and one adds a message under `PET_LAYOUT_TRACE`:
+
+    clang/lib/AST/ExprConstant.cpp          an assertion removed
+    clang/lib/AST/Expr.cpp                  an assertion made a message
+    clang/include/clang/AST/Redeclarable.h  an assertion made a message
+    clang/lib/AST/Decl.cpp                  a message added
+    clang/lib/CodeGen/CGRecordLayout.h      a message under PET_LAYOUT_TRACE
+
+They are not debugging leftovers that a clean build gets by without.
+Measured: a clang built the way this file describes, from
+`llvmorg-22.1.8` with 0001-0004 and none of the five, links the 51 units
+of llama-dspark as far as
+
+    pet_ast_link: clang/lib/AST/Expr.cpp:2083:
+    ImplicitCastExpr::Create: Assertion `(Kind != CK_LValueToRValue ||
+    !(T->isNullPtrType() || T->getAsCXXRecordDecl())) &&
+    "invalid type for lvalue-to-rvalue conversion"' failed.
+
+and stops.  The comment left in `ExprConstant.cpp` says what the four
+have in common: *a linked AST holds C bodies in a context whose language
+is C++, so this check does not hold for it.*
+
+That is a statement about pet, not about clang.  Each of the four is a
+question clang asks of an AST that a compiler built, and a linked AST
+answers differently because of how it was made.  Silencing them locally
+makes the run finish and leaves the questions unanswered, and the four
+edits are invisible to anyone reading this repository -- which is how a
+whole-program result came to rest on them without anybody meaning it to.
+
+Answering them belongs here, as 0001-0004 do.  Until then this is what
+the state is: the pipeline through `pet_linked_ir` runs on a clang whose
+`Expr.cpp`, `ExprConstant.cpp`, `Redeclarable.h` and `Decl.cpp` were
+edited by hand, and the numbers it produces were obtained that way.
 
 ## 0004-import-float16-as-float16.patch
 
