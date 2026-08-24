@@ -381,6 +381,27 @@ if(CLANG_FOR_IR)
             -DLLC=${CLANG_FOR_IR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLinkedIrTest.cmake
     )
+
+    # A variable written without an initialiser is a tentative definition,
+    # and the unit that holds it is not the one linked into.  Sema settles
+    # tentative definitions at the end of a unit, over a list it fills
+    # while parsing, and it never parsed the units imported here -- so
+    # what came out declared the variable and defined it nowhere.  A
+    # module of 28600 functions had three of ggml's lookup tables missing
+    # that way, and its own account of itself said nothing was refused.
+    # Only building a program out of it says so.
+    add_test(NAME PET_LinkedIr_tentative
+        COMMAND ${CMAKE_COMMAND}
+            -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+            -DIR=$<TARGET_FILE:pet_linked_ir>
+            -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/tentative
+            -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/linked_ir/tentative
+            "-DUNITS=reads|holds"
+            -DDRIVER=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/tentative/driver.c
+            -DCC=${CMAKE_C_COMPILER}
+            -DLLC=${CLANG_FOR_IR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLinkedIrTest.cmake
+    )
 else()
     message(STATUS "No clang to read LLVM IR with. The program a link "
         "describes will not be built.")

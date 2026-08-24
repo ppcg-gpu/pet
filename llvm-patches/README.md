@@ -82,6 +82,44 @@ x86-64 and no `GGML_*` option removes, so the AVX-512 FP16 declarations
 are in every C++ unit of `ggml-cpu` whether or not the instructions may
 be used.
 
+## What a link's own account of itself cannot say
+
+`pet_ast_link` reports what it refused and what it resolved.  Over 51
+units of llama-dspark it reported nothing refused, every one of 6750
+calls resolved, and 277 records -- and the module made from that link
+was missing three of ggml's lookup tables, a quarter of a megabyte that
+`ggml_cpu_init` fills and every f16 conversion reads.  Nothing said so
+until a program was linked against the library and the linker asked
+where they were.
+
+The report is made from the same reading that produced the module, so
+it cannot notice what the reading dropped.  It counts refusals -- the
+importer saying no -- and a variable whose definition simply never
+arrived was never refused.  There is no count that would have caught
+it, and adding one is not the answer: the answer is that a
+whole-program path is checked by building the program and running what
+the project already has, which is what `LLAMA_WHOLE_PROGRAM_LIB` in
+llama-dspark is for.
+
+Measured, once the tests were pointed at such a library: 880 unresolved
+references, 16 distinct symbols, two classes.  Thirteen were the OpenMP
+runtime and belonged to the command that made the library, not to the
+link.  Three were the tables.  Out of 28600 functions and 2833 exported
+symbols, nothing else was missing.
+
+### Open
+
+Where a variable is defined in one unit and only declared in the unit
+being linked into, the definition does not arrive: the target keeps the
+`extern` declaration it read, its redeclaration chain stays one long,
+and no definition exists anywhere in it.  Functions do not behave this
+way -- their bodies are carried over separately -- which is why a link
+can lose every global variable of an imported unit while losing no
+functions at all.  Measured with a C++ target and a C unit holding both
+an uninitialised and an initialised variable: neither arrived, while a
+function beside them did.  The early return in
+`ASTNodeImporter::VisitVarDecl` that does this has not been identified.
+
 ## Two things about measuring a link, both learned the slow way
 
 **The order of the units is part of the measurement.**  The first unit

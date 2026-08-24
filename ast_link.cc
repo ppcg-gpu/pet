@@ -1535,6 +1535,69 @@ static bool worth_announcing(Decl *d)
  * ParseAST hands the unit over when it is done, so what consumes it has
  * been given it by the time this returns.
  */
+/* Say of every tentative definition in "dc" that it is a definition.
+ *
+ * Written in C without an initialiser -- "float table[65536];" at the
+ * outermost level -- a variable is a tentative definition, and what
+ * makes it the real one is the end of the unit arriving with nothing
+ * else claiming the name.  Sema does that in ActOnEndOfTranslationUnit
+ * over a list it fills while parsing.  The units linked in here were
+ * parsed by another Sema in another process, so their tentative
+ * definitions are in no list this one holds and the end of this unit
+ * passes over them.
+ *
+ * What comes out then declares them without defining them.  ggml's
+ * three lookup tables -- ggml_table_f32_f16 and the two beside it, a
+ * quarter of a megabyte that ggml_cpu_init fills and every f16
+ * conversion reads -- were "external global" in a module holding every
+ * function of the engine, and nothing said so until a program was
+ * linked against it and the linker asked where they were.
+ *
+ * The extern "C" blocks are gone into as well as the outermost level.
+ * A C unit's declarations are put in one of those when they are brought
+ * into a C++ unit, which is where every one of a linked engine's C
+ * variables is, and looking only at the top finds none of them.
+ */
+static void complete_tentative_definitions(ASTContext &ctx, DeclContext *dc,
+	ASTConsumer &consumer)
+{
+	for (Decl *d : dc->decls()) {
+		if (auto *ls = dyn_cast<LinkageSpecDecl>(d)) {
+			complete_tentative_definitions(ctx, ls, consumer);
+			continue;
+		}
+
+		auto *vd = dyn_cast<VarDecl>(d);
+
+		if (!vd)
+			continue;
+		if (getenv("PET_LINK_WHY"))
+			fprintf(stderr, "the variable %s is %s, has %s "
+				"definition in its chain of %d, and lives "
+				"in %s\n", vd->getNameAsString().c_str(),
+				vd->isThisDeclarationADefinition(ctx) ==
+					VarDecl::Definition ? "a definition" :
+				vd->isThisDeclarationADefinition(ctx) ==
+					VarDecl::TentativeDefinition ?
+					"tentative" : "a mention",
+				vd->getDefinition() ? "a" : "no",
+				(int) std::distance(vd->redecls_begin(),
+						vd->redecls_end()),
+				cast<Decl>(vd->getDeclContext())
+					->getDeclKindName());
+		if (vd->isThisDeclarationADefinition(ctx) !=
+		    VarDecl::TentativeDefinition)
+			continue;
+		/* The one of the chain that stands for the definition, so
+		 * that a name written tentatively more than once is
+		 * defined once.
+		 */
+		if (vd->getActingDefinition() != vd)
+			continue;
+		consumer.CompleteTentativeDefinition(vd);
+	}
+}
+
 void pet_linked_ast_finish(struct pet_linked_ast *linked,
 	ASTConsumer &consumer)
 {
@@ -1599,6 +1662,10 @@ void pet_linked_ast_finish(struct pet_linked_ast *linked,
 			"point\n", fixed, left);
 
 	ParseAST(sema, /*PrintStats=*/false, /*SkipFunctionBodies=*/false);
+
+	ASTContext &ctx = target->getASTContext();
+	complete_tentative_definitions(ctx, ctx.getTranslationUnitDecl(),
+					consumer);
 }
 
 /* Where the declarations brought from a unit read as C belong in a unit
