@@ -914,37 +914,31 @@ private:
 			return;
 
 		bool stray = false;
-		/* The record's fields are gathered at most once and then
-		 * asked of as a set.  Walking them once per initialiser
-		 * instead costs the product of the two, and over a linked
-		 * C++ engine, where a standard library container brings
-		 * constructors and fields in numbers that both grow with
-		 * the units linked, that product is the whole cost of
-		 * linking: measured at 29 units of llama-dspark, 99.5 per
-		 * cent of the time under this loop and no end to it after
-		 * fifty minutes, where 24 units took 13 seconds.
+		/* Whether an initialiser names a member of this record is
+		 * asked of the initialiser, not of the record.  A field
+		 * is one of def's exactly when def is where it was
+		 * declared, so the question is a comparison and the
+		 * record never has to list what it holds.
 		 *
-		 * Gathering them is put off until an initialiser is found
-		 * that names a member, and not done at the top.  Asking a
-		 * record for its fields is what makes it read them from
-		 * the unit they were serialised in, and a constructor
-		 * that names no member -- which most of them are -- gave
-		 * no reason to read anything.  Reading them for every
-		 * constructor is slower than the product this replaces.
+		 * It used to be answered by walking def's fields and
+		 * looking for the one named, which over a linked C++
+		 * engine is the whole cost of linking.  Asking a record
+		 * for its fields walks its members to the first field,
+		 * and a standard library container's specialisation
+		 * gathers members from every unit that instantiated part
+		 * of it, so the walk grows as units are linked while the
+		 * number of constructors asking grows with it.  Profiled
+		 * at 25 units of llama-dspark: 99.5 per cent of cycles in
+		 * RecordDecl::field_begin under this loop, still running
+		 * after thirteen minutes, where 24 units linked in 13
+		 * seconds.
 		 */
-		bool gathered = false;
-		llvm::SmallPtrSet<const FieldDecl *, 16> fields;
 		for (auto *init : to_ctor->inits()) {
 			FieldDecl *f = init->getMember();
 
 			if (!f)
 				continue;
-			if (!gathered) {
-				for (const FieldDecl *g : def->fields())
-					fields.insert(g);
-				gathered = true;
-			}
-			if (!fields.count(f)) {
+			if (f->getParent() != def) {
 				stray = true;
 				stray_ctors++;
 				break;
