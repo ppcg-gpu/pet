@@ -41,9 +41,18 @@ endif()
 
 set(asts "")
 foreach(unit ${units})
+    # A unit named with its extension is taken as it is, so that one
+    # corpus can hold units of both languages: the extension is what
+    # says which language a unit is read as, and a corpus about C
+    # meeting C++ needs both in it.
+    set(file "${unit}${SUFFIX}")
+    if("${unit}" MATCHES "\\.")
+        set(file "${unit}")
+    endif()
+
     execute_process(
         COMMAND "${EMITTER}" -I "${SRCDIR}" ${emit_args}
-                "${SRCDIR}/${unit}${SUFFIX}" "${BINDIR}/${unit}.ast"
+                "${SRCDIR}/${file}" "${BINDIR}/${unit}.ast"
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)

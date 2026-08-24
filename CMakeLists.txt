@@ -284,6 +284,29 @@ add_test(NAME PET_AstLink_lazy
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
 )
 
+# One header describing two records of one name: the aggregate is
+# anonymous where the unit is read as C and called data where it is read
+# as C++, which is how ggml-common.h describes the quantised blocks of
+# ggml.  Each unit compiles.  Linked together the two records do not name
+# their members alike, and pairing them by position -- which is what the
+# comparison that took them for one walked -- writes one name down as the
+# other's declaration, so an expression carries a name it does not hold
+# and clang stops in the constructor of MemberExpr.  Refused, it is two
+# lines of the report and an exit code.
+add_test(NAME PET_AstLink_two_shapes
+    COMMAND ${CMAKE_COMMAND}
+        -DEMITTER=$<TARGET_FILE:pet_emit_ast>
+        -DLINKER=$<TARGET_FILE:pet_ast_link>
+        -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/two_shapes
+        -DBINDIR=${CMAKE_CURRENT_BINARY_DIR}/test_outputs/ast_link/two_shapes
+        -DSUFFIX=
+        -DSUMMARY_ONLY=ON
+        -DEXPECT_FAIL=ON
+        "-DUNITS=target.cpp|reads_c.c|reads_cpp.cpp"
+        -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/ast_link/two_shapes/expected.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAstLinkTest.cmake
+)
+
 # A class template with four specialisations, seen alike by two units.
 # Each specialisation is a record of its own and every one of them is
 # called after the template, so counting records by the bare name makes

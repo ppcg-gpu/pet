@@ -668,6 +668,53 @@ private:
 					ASTImportError::NameConflict);
 		}
 
+		/* A record with a member where the other has one of no
+		 * name is not that record.
+		 *
+		 * carry_members pairs members by position, which is what
+		 * the comparison that took the two records for one walked.
+		 * Where one member is called data and the one beside it
+		 * has no name at all, that pairing writes the arriving
+		 * name down as the other's declaration, and an expression
+		 * built afterwards carries one name while holding the
+		 * other; clang stops on it in the constructor of
+		 * MemberExpr, in the middle of a link and far from here.
+		 *
+		 * Only that: one named and one not.  Two members of
+		 * different names are ordinary -- a template materialises
+		 * different parts of itself in different units, so
+		 * std::vector<int> holds what one unit asked of it here
+		 * and what another asked there, and refusing over that
+		 * refuses two and a half thousand declarations of an
+		 * engine that links cleanly.  Two members with no name are
+		 * ordinary too: an anonymous union written the same way in
+		 * both is what a shared header gives.
+		 *
+		 * ggml-common.h gave the other kind: it names the
+		 * aggregates of its quantised blocks for C++ and leaves
+		 * them anonymous for C, so block_q4_K was two records of
+		 * one name.  Refused here, that is a line of the report;
+		 * paired, it is an abort.
+		 *
+		 * Asked before anything is written down, since a mapping
+		 * made and then regretted is one the importer will not
+		 * take back.
+		 */
+		if (const FieldDecl *bad = unnamed_against_named(From, found)) {
+			auto *rec = dyn_cast<NamedDecl>(From);
+			std::string name = rec ? rec->getNameAsString() : "";
+
+			fprintf(stderr, "%s%s and what the target holds under "
+				"that name do not name their members alike: "
+				"member %u is '%s' here and '%s' there\n",
+				name.empty() ? "a record" : "",
+				name.c_str(), bad->getFieldIndex(),
+				bad->getNameAsString().c_str(),
+				paired_with.c_str());
+			return llvm::make_error<ASTImportError>(
+					ASTImportError::NameConflict);
+		}
+
 		/* The importer may have written down a mapping of its own
 		 * before it gave up, and saying a second thing about the
 		 * same declaration is what it will not have.
@@ -816,6 +863,42 @@ private:
 	 * which nothing notices until something asks that record where
 	 * the member sits.
 	 */
+	/* The first member of "From" that has a name where the member in
+	 * the same place of "to" has none, or the other way round; NULL
+	 * where no pair is like that.
+	 *
+	 * Under the same condition carry_members pairs under, since that
+	 * is the pairing this is about.
+	 */
+	mutable std::string paired_with;
+
+	const FieldDecl *unnamed_against_named(Decl *From, Decl *to) const {
+		auto *from_rec = dyn_cast<RecordDecl>(From);
+		auto *to_rec = dyn_cast_or_null<RecordDecl>(to);
+
+		if (!from_rec || !to_rec)
+			return NULL;
+		if (!from_rec->isCompleteDefinition() ||
+		    !to_rec->isCompleteDefinition())
+			return NULL;
+
+		auto f = from_rec->field_begin();
+		auto t = to_rec->field_begin();
+
+		for (; f != from_rec->field_end() &&
+		       t != to_rec->field_end(); ++f, ++t) {
+			bool here = (bool) f->getDeclName();
+			bool there = (bool) t->getDeclName();
+
+			if (here == there)
+				continue;
+			paired_with = t->getNameAsString();
+			return *f;
+		}
+
+		return NULL;
+	}
+
 	void carry_members(Decl *From, Decl *to) {
 		auto *from_rec = dyn_cast<RecordDecl>(From);
 		auto *to_rec = dyn_cast_or_null<RecordDecl>(to);
