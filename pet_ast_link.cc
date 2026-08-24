@@ -85,18 +85,33 @@ int main(int argc, char **argv)
 	call_collector calls;
 	calls.TraverseDecl(ctx.getTranslationUnitDecl());
 
-	/* Every declaration of a record with a given name has to share one
-	 * canonical type, or the units were not really linked.
+	/* Every declaration of a record that names the same type has to
+	 * share one canonical type, or the units were not really linked.
+	 *
+	 * What names the same type is not the same as what is spelled the
+	 * same.  Two classes may each hold a struct impl and they are two
+	 * types; a template's specialisations are as many types as there
+	 * are specialisations, all spelled with the one template name.
+	 * Counting by the bare name calls each of those a record the link
+	 * left split, which over any C++ program is a verdict of failure
+	 * on a link that did exactly what it should.  The name is taken
+	 * qualified and with template arguments for that reason: it is
+	 * then a name of a type, and two of them being one entity is
+	 * something the link can be held to.
 	 */
 	std::map<std::string, std::set<const void *> > records;
 	/* Functions with internal linkage stay distinct per unit, so count
 	 * how many of each name the linked AST holds.
 	 */
 	std::map<std::string, int> internal;
+	PrintingPolicy policy = ctx.getPrintingPolicy();
 	for (Decl *d : ctx.getTranslationUnitDecl()->decls()) {
 		if (auto *rd = dyn_cast<RecordDecl>(d)) {
 			if (rd->getNameAsString().empty())
 				continue;
+			std::string name;
+			llvm::raw_string_ostream os(name);
+			rd->getNameForDiagnostic(os, policy, true);
 			/* The canonical declaration, rather than the
 			 * canonical type: what is being asked is
 			 * whether the two units' structs became one
@@ -106,7 +121,7 @@ int main(int argc, char **argv)
 			 * getting at the type, and clang has renamed
 			 * that more than once.
 			 */
-			records[rd->getNameAsString()].insert(
+			records[name].insert(
 				(const void *) rd->getCanonicalDecl());
 		} else if (auto *fd = dyn_cast<FunctionDecl>(d)) {
 			if (fd->getFormalLinkage() != Linkage::Internal)
