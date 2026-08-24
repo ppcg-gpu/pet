@@ -57,43 +57,53 @@ with `assert` -- which is to say not checked at all once `NDEBUG` is on,
 and which `LLVM_ABI_BREAKING_CHECKS` aborts on before the tool reads a
 line.
 
-## Four assertions that a linked AST does not satisfy
+## 0006-lvalue-to-rvalue-on-a-c-record.patch
 
-The tree this was developed against carries five files that are in no
-patch.  Four of them turn an assertion of clang's into a printed line or
-remove it outright, and one adds a message under `PET_LAYOUT_TRACE`:
+`ImplicitCastExpr::Create` asserts that a `CK_LValueToRValue` is not
+made on a class or on `std::nullptr_t`, per C++ [conv.lval]p3: copying a
+class is a constructor call and this cast does not say that.
+
+Reading a struct as a value is exactly that cast in C, though -- `y = x`
+between two structs, passing one by value, returning one.  A linked
+context holds C bodies and, because 0001 keeps the C++ record where a
+header was read by units of both languages, the type of that node
+answers `getAsCXXRecordDecl()`.  So a node that is what C says it is
+meets a rule about C++ classes, and the assertion stops a link of 51
+units of llama-dspark.
+
+The relaxation is `CXXRecordDecl::isCLike()` and nothing wider: a tag
+written `struct`, not a template, POD, with only C members.  A class
+with a copy constructor, a base or a virtual function answers false and
+is still caught.  That is the line -- between a rule that does not reach
+a body written in C and a rule switched off.
+
+Measured on both sides.  Through pet: a C unit assigning, passing and
+returning a struct into a C++ target stops the link before this and
+links after it, while the same three operations on an `int` never did
+and a C target never did.  The other side cannot be reached through pet
+at all -- clang builds a constructor call rather than this cast for a
+class with a non-trivial copy, so no such node ever arrives -- so it was
+asked of the API directly:
+
+    Plain: isCLike=true   the assertion let it through
+    Heavy: isCLike=false  Assertion ... failed
+
+## What was in the tree and is not a patch
+
+Five files of the tree this was developed against were in no patch.  One
+of them is now 0005 and one is now 0006.  The other three were removed:
 
     clang/lib/AST/ExprConstant.cpp          an assertion removed
-    clang/lib/AST/Expr.cpp                  an assertion made a message
     clang/include/clang/AST/Redeclarable.h  an assertion made a message
     clang/lib/AST/Decl.cpp                  a message added
     clang/lib/CodeGen/CGRecordLayout.h      a message under PET_LAYOUT_TRACE
 
-They are not debugging leftovers that a clean build gets by without.
-Measured: a clang built the way this file describes, from
-`llvmorg-22.1.8` with 0001-0004 and none of the five, links the 51 units
-of llama-dspark as far as
-
-    pet_ast_link: clang/lib/AST/Expr.cpp:2083:
-    ImplicitCastExpr::Create: Assertion `(Kind != CK_LValueToRValue ||
-    !(T->isNullPtrType() || T->getAsCXXRecordDecl())) &&
-    "invalid type for lvalue-to-rvalue conversion"' failed.
-
-and stops.  The comment left in `ExprConstant.cpp` says what the four
-have in common: *a linked AST holds C bodies in a context whose language
-is C++, so this check does not hold for it.*
-
-That is a statement about pet, not about clang.  Each of the four is a
-question clang asks of an AST that a compiler built, and a linked AST
-answers differently because of how it was made.  Silencing them locally
-makes the run finish and leaves the questions unanswered, and the four
-edits are invisible to anyone reading this repository -- which is how a
-whole-program result came to rest on them without anybody meaning it to.
-
-Answering them belongs here, as 0001-0004 do.  Until then this is what
-the state is: the pipeline through `pet_linked_ir` runs on a clang whose
-`Expr.cpp`, `ExprConstant.cpp`, `Redeclarable.h` and `Decl.cpp` were
-edited by hand, and the numbers it produces were obtained that way.
+Put back one at a time over the 51 units, with the link run between
+each, exactly one of the silenced assertions fired -- the one 0006
+answers.  Neither `ExprConstant.cpp`'s nor `Redeclarable.h`'s fires at
+all, and the other two only print.  They were somebody's afternoon and
+they made a whole-program result rest on a hand-edited compiler that
+nobody reading this repository could have seen.
 
 ## 0004-import-float16-as-float16.patch
 

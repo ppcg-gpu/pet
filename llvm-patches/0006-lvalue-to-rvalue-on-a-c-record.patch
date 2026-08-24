@@ -1,0 +1,29 @@
+diff --git a/clang/lib/AST/Expr.cpp b/clang/lib/AST/Expr.cpp
+index d3e381ba4..0304676e5 100644
+--- a/clang/lib/AST/Expr.cpp
++++ b/clang/lib/AST/Expr.cpp
+@@ -2080,8 +2080,23 @@ ImplicitCastExpr *ImplicitCastExpr::Create(const ASTContext &C, QualType T,
+           PathSize, FPO.requiresTrailingStorage()));
+   // Per C++ [conv.lval]p3, lvalue-to-rvalue conversions on class and
+   // std::nullptr_t have special semantics not captured by CK_LValueToRValue.
++  //
++  // Except on a record that is C-like, which one written in C is.  Reading
++  // a struct as a value -- assigning it, passing it, returning it -- is an
++  // lvalue-to-rvalue conversion in C and this node is what C says it is;
++  // [conv.lval]p3 is about a class, whose copy is a constructor call.  A
++  // context holding units of both languages holds that node with a type
++  // that answers getAsCXXRecordDecl(), because a struct read by a unit
++  // read as C++ is a CXXRecordDecl and the two are one entity.
++  //
++  // isCLike() is the whole of the relaxation: a tag written struct, not a
++  // template, POD, with only C members.  A class with a copy constructor,
++  // a base or a virtual function answers false to it and is still caught,
++  // which is where the line is -- between a rule that does not reach a
++  // linked C body and a rule switched off.
++  auto *RD = T->getAsCXXRecordDecl();
+   assert((Kind != CK_LValueToRValue ||
+-          !(T->isNullPtrType() || T->getAsCXXRecordDecl())) &&
++          !(T->isNullPtrType() || (RD && !RD->isCLike()))) &&
+          "invalid type for lvalue-to-rvalue conversion");
+   ImplicitCastExpr *E =
+       new (Buffer) ImplicitCastExpr(T, Kind, Operand, PathSize, FPO, VK);
