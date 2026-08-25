@@ -32,6 +32,8 @@
  * Leiden University.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <isl/id.h>
 #include <isl/space.h>
 #include <isl/local_space.h>
@@ -81,6 +83,22 @@ static int depends_on_expressions(__isl_keep pet_expr *expr, void *user)
 						    isl_dim_in, dim + i, 1))
 			continue;
 		if (expr->args[i]->type != pet_expr_access) {
+			/* NAME THE OFFENDER, not the category.  ppcg reports
+			 * "some index expressions cannot currently be printed"
+			 * and stops there, which says what class of thing was
+			 * met and never which one, so the search for it is a
+			 * bisection over the source.  Under PET_DEBUG_ACCESS
+			 * the access and the argument that is not an access
+			 * are dumped, and the bisection is one run.
+			 */
+			if (getenv("PET_DEBUG_ACCESS")) {
+				fprintf(stderr, "pet: index expression cannot "
+					"be printed -- argument %d of this "
+					"access is not itself an access:\n", i);
+				pet_expr_dump(expr);
+				fprintf(stderr, "the argument:\n");
+				pet_expr_dump(expr->args[i]);
+			}
 			*found = 1;
 			return -1;
 		}
