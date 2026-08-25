@@ -978,13 +978,69 @@ __isl_give pet_tree *PetScan::extract(Decl *decl)
 	lhs = extract_access_expr(vd);
 	lhs = mark_write(lhs);
 	if (!vd->getInit())
-		tree = pet_tree_new_decl(lhs);
-	else {
-		rhs = extract_expr(vd->getInit());
-		tree = pet_tree_new_decl_init(lhs, rhs);
-	}
+		return pet_tree_new_decl(lhs);
 
-	return tree;
+	/* A CALL IN AN INITIALISER IS A CALL.
+	 *
+	 * Bodies are put in place by pet_inlined_calls, and it was reached
+	 * from one place only: PetScan::extract_expr_stmt, an expression
+	 * statement.  An initialiser is not one, so
+	 *
+	 *	y[i] = f(x[i]);		the body of f comes over
+	 *	const float d = f(x[i]);	f stays a call
+	 *
+	 * and which of the two a program is written in decides whether its
+	 * arithmetic can be read.  Measured on ggml's q8_0 row pair: inside
+	 * one inlined body, `base = fp32_from_bits(...) + base;` came over
+	 * and `const uint32_t w = fp32_to_bits(f);` two lines above it did
+	 * not, so the same union pun was transparent in one line and opaque
+	 * in the next.  ggml declares nearly every intermediate const, so
+	 * this reached the whole engine: the f16 conversion of a
+	 * dequantiser, `const float d = GGML_FP16_TO_FP32(x[i].d);`, was a
+	 * call in a scop that was otherwise fully scheduled.
+	 *
+	 * THE DECLARATION STAYS OUTSIDE THE BLOCK THE BODIES GO IN.
+	 * pet_inlined_calls::add_inlined wraps its result in a block that is
+	 * a scope, which is right for the return variables it declares there
+	 * and wrong for this one: a variable declared inside a scope is
+	 * killed at its end, so `d` was dead before the loop that reads it,
+	 * the read depended on nothing, and isl was free to schedule the
+	 * whole conversion AFTER the multiplication that wanted it.  That is
+	 * what came out -- measured on the dequantiser, y[] written from an
+	 * undefined d and the conversion trailing behind it.
+	 *
+	 * So the declaration is emitted on its own, the initialiser becomes
+	 * an assignment to it, and only the assignment goes inside the block
+	 * with the bodies.  The two are grouped by a block that is NOT a
+	 * scope (the 0), which is the same thing extract(DeclStmt) does for
+	 * a declaration of several variables.
+	 */
+	{
+		pet_inlined_calls ic(this);
+		pet_expr *var;
+		pet_tree *body, *group;
+		int type_size;
+
+		ic.collect(vd->getInit());
+		call2id = &ic.call2id;
+		rhs = extract_expr(vd->getInit());
+		call2id = NULL;
+
+		if (ic.inlined.empty())
+			return pet_tree_new_decl_init(lhs, rhs);
+
+		var = mark_write(extract_access_expr(vd));
+		type_size = pet_clang_get_type_size(vd->getType(), ast_context);
+		body = pet_tree_new_expr(pet_expr_new_binary(type_size,
+						pet_op_assign, var, rhs));
+		body = ic.add_inlined(body);
+
+		group = pet_tree_new_block(ctx, 0, 2);
+		group = pet_tree_block_add_child(group, pet_tree_new_decl(lhs));
+		group = pet_tree_block_add_child(group, body);
+
+		return group;
+	}
 }
 
 /* Construct a pet_tree for a variable declaration statement.
@@ -1392,15 +1448,42 @@ __isl_give pet_expr *PetScan::extract_expr(CallExpr *expr)
 }
 
 /* Construct a pet_expr representing a (C style) cast.
+ *
+ * A cast whose written type is, after canonicalisation and after dropping
+ * qualifiers, the type the operand already has is not a conversion: it
+ * computes the operand.  Such a cast is therefore extracted as its operand,
+ * and the pet_expr_cast node is not built.
+ *
+ * This is not a simplification for its own sake.  A pet_expr_cast is opaque
+ * to the parts of pet that must look through an expression: an index
+ * subscript that is a cast makes pet_stmt_can_build_ast_exprs answer no
+ * ("argument %d of this access is not itself an access"), and the whole scop
+ * is then passed through unscheduled.  The idiom that meets it is a table
+ * lookup keyed by a narrow integer, of which ggml has three written down side
+ * by side -- simd-mappings.h:41 ggml_table_f32_e8m0_half[(uint8_t)(x)],
+ * :48 ggml_table_f32_ue4m3[(uint8_t)(x)], and the f16 table reached the same
+ * way -- where the operand is ALREADY uint8_t/uint16_t and the cast says so
+ * rather than doing anything.  Dropping those casts costs no value and makes
+ * the subscript an access, which is what the printer needs.
+ *
+ * A cast that does convert -- a narrowing, a signedness change, a
+ * float/integer conversion -- fails this test and is still built as a cast,
+ * so nothing that changes a value is silently discarded.
  */
 __isl_give pet_expr *PetScan::extract_expr(CStyleCastExpr *expr)
 {
 	pet_expr *arg;
-	QualType type;
+	QualType type, dst, src;
 
 	arg = extract_expr(expr->getSubExpr());
 	if (!arg)
 		return NULL;
+
+	dst = ast_context.getCanonicalType(expr->getType()).getUnqualifiedType();
+	src = ast_context.getCanonicalType(
+		expr->getSubExpr()->getType()).getUnqualifiedType();
+	if (dst == src)
+		return arg;
 
 	type = expr->getTypeAsWritten();
 	return pet_expr_new_cast(type.getAsString().c_str(), arg);
@@ -3627,6 +3710,39 @@ static bool has_printable_definition(RecordDecl *decl)
 	return decl->getLexicalDeclContext() == decl->getDeclContext();
 }
 
+/* The C for the type of a variable whose record type has no name.
+ *
+ * clang spells such a type "union (unnamed at ggml-impl.h:382:5)", which is a
+ * diagnostic and not C: a scop containing
+ *
+ *	union { float as_value; uint32_t as_bits; } fp32;
+ *
+ * -- ggml's fp32_to_bits, and every bit pun written the same way -- came out
+ * of ppcg with that phrase where the type belonged and did not compile.  The
+ * variable is real, the type is real, and only the NAME is missing, because
+ * the source never gave it one.  So the definition is written out in place of
+ * the name, which is what the source itself says and is valid C wherever a
+ * type may appear.
+ *
+ * Two variables spelled this way get two distinct types, exactly as they do
+ * in the source: an unnamed record type is unique to its declaration, so
+ * nothing that was assignable becomes unassignable.
+ */
+static std::string anonymous_record_definition(RecordDecl *decl,
+	ASTContext &ast_context)
+{
+	std::string s;
+	llvm::raw_string_ostream S(s);
+	PrintingPolicy policy = ast_context.getPrintingPolicy();
+
+	policy.IncludeTagDefinition = 1;
+	policy.SuppressTagKeyword = 0;
+	decl->print(S, policy, 0, true);
+	S.flush();
+
+	return s;
+}
+
 /* Add all TypedefType objects that appear when dereferencing "type"
  * to "types".
  */
@@ -3696,6 +3812,18 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 		base.removeLocalConst();
 	name = base.getAsString();
 
+	/* An unnamed record type is written out, not named.  This is decided
+	 * before the "types" block below and independently of it: a scop's
+	 * local variables are extracted with no PetTypes at all, and those
+	 * are exactly the ones an inlined bit pun brings in.
+	 */
+	if (base->isRecordType()) {
+		RecordDecl *rd = pet_clang_record_decl(base);
+
+		if (rd && !rd->getDeclName() && rd->isCompleteDefinition())
+			name = anonymous_record_definition(rd, ast_context);
+	}
+
 	if (types) {
 		insert_intermediate_typedefs(types, qt);
 		if (isa<TypedefType>(base)) {
@@ -3710,7 +3838,7 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 				types->insert(typedecl);
 			else if (has_printable_definition(decl))
 				types->insert(decl);
-			else
+			else if (decl->getDeclName())
 				name = "<subfield>";
 		}
 	}
