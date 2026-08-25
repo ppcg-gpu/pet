@@ -1784,6 +1784,26 @@ __isl_give pet_tree *PetScan::extract_for(ForStmt *stmt)
 			return NULL;
 		iv = var;
 		rhs = var->getInit();
+		/* AN ITERATOR IS A DECLARATION LIKE ANY OTHER.
+		 *
+		 * Renaming happens in extract(CompoundStmt *): every VarDecl
+		 * that reached `declarations` is checked against the names in
+		 * use and given a suffix if it collides, and the substituter
+		 * then carries the new name into the declaration and into
+		 * every access, which is why n_1 and acc_4 come out right.
+		 * An iterator declared in a for-init never reached that list:
+		 * it is taken here and handed straight to extract_access_expr.
+		 *
+		 * With bodies inlined that is not a curiosity.  Each body
+		 * brings its own `for (int64_t i = ...)`, and a scop that
+		 * inlines forty-four of them declares `i` forty-four times in
+		 * one scope -- measured on an emitted transformer, where the
+		 * scheduled output would not compile: "redeclaration of 'i'
+		 * with no linkage".  Offering the iterator to the same path
+		 * costs nothing when there is no collision and renames it
+		 * when there is.
+		 */
+		declarations.push_back(var);
 	} else {
 		unsupported(stmt->getInit());
 		return NULL;
