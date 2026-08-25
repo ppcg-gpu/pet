@@ -954,6 +954,19 @@ __isl_give pet_tree *PetScan::extract(Decl *decl)
 	pet_expr *lhs, *rhs;
 	pet_tree *tree;
 
+	/* A TYPE DECLARED INSIDE THE BLOCK IS NOT A STATEMENT.  `union { float
+	 * f; uint32_t u; } c;` is two declarations to clang -- the record and
+	 * the variable -- and stopping on the record refused the whole scop
+	 * over a construct that allocates nothing and computes nothing.  The
+	 * ALIASING the union states is not lost by skipping it: it is carried
+	 * by the member accesses, which extract_index_expr maps onto one
+	 * storage.  Skipping the type without that would be the silent half
+	 * of the fix, and worse than refusing.
+	 */
+	if (isa<RecordDecl>(decl) || isa<TypedefNameDecl>(decl) ||
+	    isa<EnumDecl>(decl))
+		return pet_tree_new_block(ctx, 0, 0);
+
 	if (!isa<VarDecl>(decl)) {
 		report_unsupported_declaration(decl);
 		return NULL;
@@ -1056,6 +1069,81 @@ __isl_give pet_expr *PetScan::extract_expr(FloatingLiteral *expr)
  * If "expr" is a reference to an enum constant, then return
  * an integer expression instead, representing the value of the enum constant.
  */
+/* Is "expr" a reference to a member of a union?
+ *
+ * The members of a union are one storage read and written under different
+ * types.  A dependence analysis told otherwise is free to exchange a write
+ * through one member with a read through another, and the read then takes
+ * bits that were never written -- measured, and kept as
+ * tests/pet-union/decl_only for the record.
+ */
+static FieldDecl *union_field(Expr *expr)
+{
+	MemberExpr *member = dyn_cast<MemberExpr>(expr);
+	FieldDecl *field;
+
+	if (!member)
+		return NULL;
+	field = dyn_cast<FieldDecl>(member->getMemberDecl());
+	if (!field || !field->getParent() || !field->getParent()->isUnion())
+		return NULL;
+
+	return field;
+}
+
+/* Construct an access pet_expr from "expr", an access to a member of a union.
+ *
+ * The INDEX keeps the member, because the index is what is printed and
+ * "c.f" is what the source says.  The ACCESS RELATION is built from the
+ * BASE instead, because the relation is what the dependence analysis reads
+ * and the base is the storage the members share.  pet keeps those two apart
+ * already -- a relation derived from the index is only a default, taken when
+ * none was given -- so this gives the one that was missing rather than
+ * bending the other.
+ *
+ * The read and write flags are restored afterwards:
+ * pet_expr_access_set_access marks the expression according to the type of
+ * relation it is handed, and at this point nobody has yet said whether this
+ * access is a read or a write.
+ */
+__isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
+	__isl_take pet_expr *index)
+{
+	pet_expr *access, *base;
+	isl_union_map *relation;
+	isl_bool was_read, was_write;
+	enum pet_expr_access_type type[] = { pet_expr_access_may_read,
+					     pet_expr_access_may_write,
+					     pet_expr_access_must_write };
+	int i;
+
+	access = pet_expr_access_from_index(expr->getType(), index,
+					    ast_context);
+	base = extract_access_expr(cast<MemberExpr>(expr)->getBase());
+	if (!access || !base) {
+		pet_expr_free(base);
+		return access;
+	}
+
+	was_read = pet_expr_access_is_read(access);
+	was_write = pet_expr_access_is_write(access);
+
+	relation = pet_expr_access_get_may_read(base);
+	pet_expr_free(base);
+	if (!relation)
+		return access;
+
+	for (i = 0; i < 3; ++i)
+		access = pet_expr_access_set_access(access, type[i],
+						isl_union_map_copy(relation));
+	isl_union_map_free(relation);
+
+	access = pet_expr_access_set_read(access, was_read);
+	access = pet_expr_access_set_write(access, was_write);
+
+	return access;
+}
+
 __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 {
 	pet_expr *index;
@@ -1064,6 +1152,9 @@ __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 
 	if (pet_expr_get_type(index) == pet_expr_int)
 		return index;
+
+	if (union_field(expr))
+		return access_from_union_member(expr, index);
 
 	return pet_expr_access_from_index(expr->getType(), index, ast_context);
 }

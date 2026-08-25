@@ -511,6 +511,8 @@ private:
 	__isl_give pet_expr *extract_expr(clang::CStyleCastExpr *expr);
 
 	__isl_give pet_expr *extract_access_expr(clang::Expr *expr);
+	__isl_give pet_expr *access_from_union_member(clang::Expr *expr,
+		__isl_take pet_expr *index);
 	__isl_give pet_expr *extract_access_expr(clang::ValueDecl *decl);
 
 	__isl_give pet_expr *extract_index_expr(
