@@ -1013,6 +1013,12 @@ static int emit_scop(yaml_emitter_t *emitter, struct pet_scop *scop)
 	if (emit_named_string(emitter,
 				"indent", pet_loc_get_indent(scop->loc)) < 0)
 		return -1;
+	/* Only a scop that was named carries the key, so that every scop
+	 * already recorded by a test does not have to be written again
+	 * to say that it has no name.
+	 */
+	if (scop->name && emit_named_string(emitter, "name", scop->name) < 0)
+		return -1;
 	if (emit_string(emitter, "context") < 0)
 		return -1;
 	if (emit_set(emitter, scop->context) < 0)

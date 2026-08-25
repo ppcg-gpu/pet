@@ -412,11 +412,15 @@ struct ScopLocList {
 	 * If the last #pragma scop did not have a matching
 	 * #pragma endscop then overwrite it.
 	 * "start" points to the location of the scop pragma.
+	 * "name" is the identifier the pragma was written with, or
+	 * empty if it was written without one.
 	 */
-	void add_start(SourceManager &SM, SourceLocation start) {
+	void add_start(SourceManager &SM, SourceLocation start,
+		const std::string &name) {
 		ScopLoc loc;
 
 		loc.scop = start;
+		loc.name = name;
 		int line = SM.getExpansionLineNumber(start);
 		start = translateLineCol(SM, SM.getFileID(start), line, 1);
 		loc.start_line = line;
@@ -446,9 +450,20 @@ struct ScopLocList {
 /* Handle pragmas of the form
  *
  *	#pragma scop
+ *	#pragma scop identifier
  *
  * In particular, store the location of the line containing
- * the pragma in the list "scops".
+ * the pragma in the list "scops", along with the identifier
+ * if one was written.
+ *
+ * The identifier is what lets anything outside the source refer to one
+ * scop rather than another.  Where it stands is all a scop otherwise
+ * has, and a position is no name: it moves when a line is added above
+ * it, and two scops of one file are told apart only by counting.
+ *
+ * Anything other than an identifier on the line is refused rather than
+ * passed over, since a name that was written and not read would leave
+ * the scop under a name the caller does not know it by.
  */
 struct PragmaScopHandler : public PragmaHandler {
 	ScopLocList &scops;
@@ -461,7 +476,24 @@ struct PragmaScopHandler : public PragmaHandler {
 				  Token &ScopTok) {
 		SourceManager &SM = PP.getSourceManager();
 		SourceLocation sloc = ScopTok.getLocation();
-		scops.add_start(SM, sloc);
+		std::string name;
+		Token token;
+
+		PP.Lex(token);
+		if (token.isNot(tok::eod)) {
+			if (token.isNot(tok::identifier)) {
+				unsupported(PP, token.getLocation());
+				return;
+			}
+			name = token.getIdentifierInfo()->getName().str();
+			PP.Lex(token);
+			if (token.isNot(tok::eod)) {
+				unsupported(PP, token.getLocation());
+				return;
+			}
+		}
+
+		scops.add_start(SM, sloc, name);
 	}
 };
 
@@ -718,6 +750,7 @@ struct PetASTConsumer : public ASTConsumer {
 			PetScan ps(PP, ast_context, fd, loc, options,
 				    isl_union_map_copy(vb), independent);
 			scop = ps.scan(fd);
+			scop = pet_scop_set_name(scop, loc.name.c_str());
 			call_fn(scop);
 		}
 	}

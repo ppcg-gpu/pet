@@ -499,6 +499,13 @@ struct pet_independence {
  * by this scop.
  * If the scop was detected based on scop and endscop pragmas, then
  * the lines containing these pragmas are included in this region.
+ *
+ * "name" is the identifier the scop pragma was written with, or NULL
+ * if the scop was written without one or was not written at all --
+ * autodetected scops are never named, since nobody wrote them down.
+ * It is what lets a caller ask for one scop rather than another, and
+ * what a generated file can be called after.
+ *
  * In the final result, the context describes the set of parameter values
  * for which the scop can be executed.
  * During the construction of the pet_scop, the context lives in a set space
@@ -517,6 +524,7 @@ struct pet_independence {
  */
 struct pet_scop {
 	pet_loc *loc;
+	char *name;
 
 	isl_set *context;
 	isl_set *context_value;
@@ -625,6 +633,16 @@ int pet_scop_can_build_ast_exprs(__isl_keep pet_scop *scop);
 
 void pet_scop_dump(__isl_keep pet_scop *scop);
 __isl_null pet_scop *pet_scop_free(__isl_take pet_scop *scop);
+
+/* Return the identifier "scop" was written with, or NULL if it was
+ * written without one.  The string belongs to "scop".
+ */
+const char *pet_scop_get_name(__isl_keep pet_scop *scop);
+/* Give "scop" the identifier "name", replacing any it already had.
+ * A NULL or empty "name" leaves it unnamed.
+ */
+__isl_give pet_scop *pet_scop_set_name(__isl_take pet_scop *scop,
+	const char *name);
 
 /* Return the context of "scop". */
 __isl_give isl_set *pet_scop_get_context(__isl_keep pet_scop *scop);

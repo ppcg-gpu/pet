@@ -46,6 +46,10 @@ struct StmtRange : std::pair<StmtIterator,StmtIterator> {
  * "scop" and "endscop" are the source locations of the scop and
  * endscop pragmas.
  * "start_line" is the line number of the start position.
+ * "name" is the identifier the scop pragma was written with, or empty
+ * if it was written without one.  A scop is otherwise known only by
+ * where it stands, which is no use to anything that has to name it
+ * from the outside.
  */
 struct ScopLoc {
 	ScopLoc() : end(0) {}
@@ -55,6 +59,7 @@ struct ScopLoc {
 	unsigned start_line;
 	unsigned start;
 	unsigned end;
+	std::string name;
 };
 
 /* The information extracted from a pragma pencil independent.

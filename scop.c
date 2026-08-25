@@ -1090,6 +1090,7 @@ struct pet_scop *pet_scop_free(struct pet_scop *scop)
 	if (!scop)
 		return NULL;
 	pet_loc_free(scop->loc);
+	free(scop->name);
 	isl_set_free(scop->context);
 	isl_set_free(scop->context_value);
 	isl_schedule_free(scop->schedule);
@@ -1117,6 +1118,38 @@ struct pet_scop *pet_scop_free(struct pet_scop *scop)
 	isl_multi_pw_aff_free(ext->skip[pet_skip_later]);
 	free(scop);
 	return NULL;
+}
+
+/* Return the identifier "scop" was written with, or NULL if it was
+ * written without one.
+ */
+const char *pet_scop_get_name(__isl_keep pet_scop *scop)
+{
+	return scop ? scop->name : NULL;
+}
+
+/* Give "scop" the identifier "name", replacing any it already had.
+ *
+ * An empty name is taken for no name rather than for a name that is
+ * the empty string, so that a caller passing on what it was given
+ * does not have to tell the two apart.
+ */
+__isl_give pet_scop *pet_scop_set_name(__isl_take pet_scop *scop,
+	const char *name)
+{
+	char *copy = NULL;
+
+	if (!scop)
+		return NULL;
+	if (name && name[0]) {
+		copy = strdup(name);
+		if (!copy)
+			return pet_scop_free(scop);
+	}
+	free(scop->name);
+	scop->name = copy;
+
+	return scop;
 }
 
 void pet_type_dump(struct pet_type *type)
@@ -1281,6 +1314,16 @@ int pet_scop_is_equal(struct pet_scop *scop1, struct pet_scop *scop2)
 	int equal;
 
 	if (!scop1 || !scop2)
+		return 0;
+
+	/* A scop is asked for by the identifier it was written with, so
+	 * two that differ in it are not one scop under two spellings:
+	 * whatever is generated from them has to be told apart, and the
+	 * name is what tells it.
+	 */
+	if (!scop1->name != !scop2->name)
+		return 0;
+	if (scop1->name && strcmp(scop1->name, scop2->name))
 		return 0;
 
 	if (!isl_set_is_equal(scop1->context, scop2->context))

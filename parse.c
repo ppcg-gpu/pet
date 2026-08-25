@@ -1511,6 +1511,9 @@ static struct pet_scop *extract_scop(isl_ctx *ctx, yaml_document_t *document,
 		if (key->type != YAML_SCALAR_NODE)
 			isl_die(ctx, isl_error_invalid, "expecting scalar key",
 				return pet_scop_free(scop));
+		if (!strcmp((char *) key->data.scalar.value, "name"))
+			scop = pet_scop_set_name(scop,
+					(char *) value->data.scalar.value);
 		if (!strcmp((char *) key->data.scalar.value, "context"))
 			scop->context = extract_set(ctx, document, value);
 		if (!strcmp((char *) key->data.scalar.value, "context_value"))
