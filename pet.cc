@@ -570,6 +570,82 @@ struct PragmaLiveOutHandler : public PragmaHandler {
 	}
 };
 
+/* Handle pragmas of the form
+ *
+ *	#pragma ppcg arena name offset name offset ...
+ *
+ * saying that the named arrays occupy one piece of storage, each at the
+ * given BYTE offset within it.  The array at offset 0 is the representative:
+ * every other array's access relation is composed into it, so that a
+ * dependence analysis sees one array where the source has several.
+ *
+ * THERE IS DELIBERATELY NO INVENTED ARENA NAME.  An array pet has never seen
+ * declared is scop-local to it, killed at the end of the scop, and every
+ * write composed into it becomes dead -- which is the loss ppcg 58c6418 was
+ * written to make loud, and it must not arrive here disguised as a feature.
+ * So the storage is one of the arrays the program already has.
+ *
+ * The C is not changed by any of this: the arrays keep their names, their
+ * types, their two-dimensional declarations and their printed subscripts.
+ * Only the relation moves.  That is the whole reason this form was reached
+ * for after three others were refused by measurement -- a cast in the access
+ * and a flattened buffer both put a data-dependent index back under a
+ * multiplication, which is the one thing ppcg cannot relate.
+ */
+struct PragmaArenaHandler : public PragmaHandler {
+	Sema &sema;
+
+	PragmaArenaHandler(Sema &sema) :
+		PragmaHandler("ppcg"), sema(sema) {}
+
+	virtual void HandlePragma(Preprocessor &PP,
+				  PragmaIntroducer Introducer,
+				  Token &PpcgTok) {
+		Token token;
+		std::vector<std::pair<ValueDecl *, long> > seen;
+		ValueDecl *rep = NULL;
+
+		PP.Lex(token);
+		if (token.isNot(tok::identifier) ||
+		    !token.getIdentifierInfo()->isStr("arena"))
+			return;
+
+		PP.Lex(token);
+		while (token.isNot(tok::eod)) {
+			ValueDecl *vd;
+			long offset;
+
+			vd = get_value_decl(sema, token);
+			if (!vd) {
+				unsupported(PP, token.getLocation());
+				return;
+			}
+			PP.Lex(token);
+			if (token.isNot(tok::numeric_constant)) {
+				unsupported(PP, token.getLocation());
+				return;
+			}
+			offset = strtol(token.getLiteralData(), NULL, 10);
+			seen.push_back(std::make_pair(vd, offset));
+			if (offset == 0 && !rep)
+				rep = vd;
+			PP.Lex(token);
+		}
+
+		/* THE STORAGE MUST BE ONE OF THE ARRAYS.  Without an array at
+		 * offset 0 there is nothing to compose into, and inventing one
+		 * is the mistake described above.
+		 */
+		if (!rep) {
+			unsupported(PP, PpcgTok.getLocation());
+			return;
+		}
+
+		for (unsigned i = 0; i < seen.size(); ++i)
+			pet_arena_add(seen[i].first, rep, seen[i].second);
+	}
+};
+
 /* For each array in "scop", set its value_bounds property
  * based on the information in "value_bounds" and
  * mark it as live_out if it appears in "live_out".
@@ -1626,6 +1702,13 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 		PP.AddPragmaHandler(new PragmaLiveOutHandler(*sema,
 							consumer.live_out));
 	}
+	/* The storage annotation is read in both modes: it says what the
+	 * program means, not what this run was asked to look for, and a scop
+	 * found by autodetection needs it exactly as much as one pointed at.
+	 * Cleared first so that one file's annotation cannot reach another.
+	 */
+	pet_arena_clear();
+	PP.AddPragmaHandler(new PragmaArenaHandler(*sema));
 
 	consumer.add_pragma_handlers(sema);
 

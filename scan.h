@@ -523,6 +523,11 @@ private:
 		int scale, int shift);
 	__isl_give pet_expr *access_from_union_member(clang::Expr *expr,
 		__isl_take pet_expr *index);
+	int arena_scale(clang::Expr *expr, clang::ValueDecl *rep, long offset);
+	__isl_give pet_expr *arena_storage(clang::Expr *expr,
+		clang::ValueDecl *rep, long offset, int scale, int shift);
+	__isl_give pet_expr *access_from_arena(clang::Expr *expr,
+		__isl_take pet_expr *index, clang::ValueDecl *rep, long offset);
 	__isl_give pet_expr *extract_access_expr(clang::ValueDecl *decl);
 
 	__isl_give pet_expr *extract_index_expr(
@@ -549,6 +554,7 @@ private:
 	void unsupported(clang::Stmt *stmt);
 	void report_unsupported_unary_operator(clang::Stmt *stmt);
 	void report_unsupported_union_member_size(clang::Stmt *stmt);
+	void report_arena(clang::Stmt *stmt, const std::string &why);
 	void report_unsupported_binary_operator(clang::Stmt *stmt);
 	void report_unsupported_statement_type(clang::Stmt *stmt);
 	void report_prototype_required(clang::Stmt *stmt);
@@ -563,5 +569,15 @@ private:
 	void report_return_not_at_end_of_function(clang::Stmt *stmt);
 	void report_unsupported_recursive_type(clang::Decl *decl);
 };
+
+/* WHICH SEPARATELY DECLARED ARRAYS ARE ONE PIECE OF STORAGE.
+ *
+ * Filled by the "#pragma ppcg arena" handler before a scan and read while
+ * access relations are built.  Declared here rather than passed to PetScan
+ * because PetScan is constructed in five places and none of the other four
+ * has anything to say about storage.
+ */
+void pet_arena_clear(void);
+void pet_arena_add(clang::ValueDecl *decl, clang::ValueDecl *rep, long offset);
 
 #endif

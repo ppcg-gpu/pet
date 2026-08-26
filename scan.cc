@@ -434,10 +434,33 @@ void PetScan::report_unsupported_union_member_size(Stmt *stmt)
 	report(stmt, id);
 }
 
+/* THE THREE WAYS A STORAGE ANNOTATION CANNOT BE HONOURED.
+ *
+ * Each names the array and both numbers, because the whole point of the
+ * annotation is that a human wrote it and a human has to be able to correct
+ * it.  Each returns to a caller that refuses the expression, so the refusal
+ * reaches the exit status: a guard that reports and carries on is worse than
+ * no guard, which the union path demonstrated with four warnings, exit 0 and
+ * a wrong answer.
+ */
+void PetScan::report_arena(Stmt *stmt, const std::string &why)
+{
+	DiagnosticsEngine &diag = PP.getDiagnostics();
+	std::string msg = "storage annotation: " + why;
+	SourceRange range = stmt ? stmt->getSourceRange() : SourceRange();
+
+	if (options->autodetect) {
+		stopped_at(range, msg);
+		return;
+	}
+
+	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning, "%0");
+	diag.Report(range.getBegin(), id) << msg << range;
+}
+
 /* Report an unsupported binary operator, unless autodetect is set.
  */
-void PetScan::report_unsupported_binary_operator(Stmt *stmt)
-{
+void PetScan::report_unsupported_binary_operator(Stmt *stmt){
 	DiagnosticsEngine &diag = PP.getDiagnostics();
 	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning,
 			       "this type of binary operator is not supported");
@@ -1518,9 +1541,315 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 	return access;
 }
 
+/* The size in BYTES of one element of an array-or-pointer declaration.
+ *
+ * NOT element_size: that stops at getBaseElementType, which strips array
+ * types and leaves a POINTER alone, so "float * lo" measured 8 -- the size
+ * of the pointer -- and every stride was then judged against it.  The union
+ * path never sees a pointer here because its declarations are fields, which
+ * is why the two are separate rather than one function bent to serve both.
+ */
+static uint64_t pointee_element_size(QualType qt, ASTContext &ast_context)
+{
+	if (qt->isPointerType())
+		qt = qt->getPointeeType();
+
+	return element_size(qt, ast_context);
+}
+
+/* WHICH SEPARATELY DECLARED ARRAYS ARE ONE PIECE OF STORAGE.
+ *
+ * Filled by the "#pragma ppcg arena" handler in pet.cc before the scan runs,
+ * read here while access relations are built.  A file-scope map rather than
+ * a constructor argument because PetScan is built in five places and none of
+ * them has anything else to say about storage.
+ *
+ * The key is the ValueDecl, which is what the pragma resolves its names to
+ * and what an access ultimately refers to, so the two ends agree without a
+ * string comparison anywhere.
+ */
+struct pet_arena_entry {
+	ValueDecl *rep;
+	long offset;
+};
+static std::map<ValueDecl *, pet_arena_entry> pet_arena_map;
+
+void pet_arena_clear(void)
+{
+	pet_arena_map.clear();
+}
+
+void pet_arena_add(ValueDecl *decl, ValueDecl *rep, long offset)
+{
+	struct pet_arena_entry e = { rep, offset };
+
+	pet_arena_map[decl] = e;
+}
+
+/* The array "decl" shares storage with, and its byte offset within it,
+ * or NULL if it shares storage with nothing.
+ *
+ * The representative shares storage with itself at offset 0, and answering
+ * NULL for it leaves its accesses on the ordinary path: composing an array
+ * into itself at offset 0 is the identity, and not doing it keeps the common
+ * case exactly as it was.
+ */
+static ValueDecl *pet_arena_lookup(ValueDecl *decl, long *offset)
+{
+	std::map<ValueDecl *, pet_arena_entry>::iterator it;
+
+	it = pet_arena_map.find(decl);
+	if (it == pet_arena_map.end())
+		return NULL;
+	if (it->second.rep == decl)
+		return NULL;
+	*offset = it->second.offset;
+
+	return it->second.rep;
+}
+
+/* The array reference at the root of "expr", looking through subscripts,
+ * or NULL if there is none.
+ *
+ * The same shape as union_member_root: an access to an annotated array is
+ * "lo[i]" or "A[i][j]", an ArraySubscriptExpr chain ending in a reference to
+ * the declaration the pragma named.
+ */
+static ValueDecl *arena_array_root(Expr *expr)
+{
+	DeclRefExpr *ref;
+
+	while (ArraySubscriptExpr *sub = dyn_cast<ArraySubscriptExpr>(expr))
+		expr = sub->getBase()->IgnoreParenImpCasts();
+
+	ref = dyn_cast<DeclRefExpr>(expr);
+	if (!ref)
+		return NULL;
+
+	return ref->getDecl();
+}
+
+/* Is "expr" an access to an array that shares storage with another one?
+ */
+static ValueDecl *arena_member(Expr *expr, long *offset)
+{
+	ValueDecl *decl = arena_array_root(expr);
+
+	if (!decl)
+		return NULL;
+
+	return pet_arena_lookup(decl, offset);
+}
+
+/* The byte stride of each subscript of "expr", outermost first.
+ *
+ * The stride of a subscript is the size of what it yields: for
+ * "float (*A)[128]", "A[i]" is a float[128] and steps 512 bytes, while
+ * "A[i][j]" is a float and steps 4.  Taken from the type rather than assumed,
+ * because a two-dimensional buffer is exactly the case an annotation has to
+ * carry -- ppcg builds no relation for a data-dependent row multiplied by a
+ * stride, so those buffers are declared two-dimensional and must stay that
+ * way.
+ */
+static void arena_strides(Expr *expr, ASTContext &ast_context,
+	std::vector<ArraySubscriptExpr *> &subs, std::vector<uint64_t> &strides)
+{
+	while (ArraySubscriptExpr *sub = dyn_cast<ArraySubscriptExpr>(expr)) {
+		subs.push_back(sub);
+		strides.push_back(
+		    ast_context.getTypeSizeInChars(sub->getType()).getQuantity());
+		expr = sub->getBase()->IgnoreParenImpCasts();
+	}
+	std::reverse(subs.begin(), subs.end());
+	std::reverse(strides.begin(), strides.end());
+}
+
+/* Construct an access to the representative of the storage "expr" is part of,
+ * covering the "shift"th of the "scale" representative elements that one
+ * element of "expr" spans.
+ *
+ * The index is built from the representative and a single affine subscript
+ *
+ *	offset/unit + shift + sum over k of i_k * stride_k/unit
+ *
+ * which is affine in any number of dimensions, and that is the whole reason
+ * this form survived where three others did not.  The C is untouched: the
+ * array keeps its name, its type, its two-dimensional declaration and its
+ * printed subscripts, and only the relation moves.  A cast in the access and
+ * a flattened buffer both put the data-dependent index back under a
+ * multiplication, which is the one thing ppcg cannot relate -- measured at
+ * 402 nodes, where flattening took 316 parallel bands to 0.
+ */
+__isl_give pet_expr *PetScan::arena_storage(Expr *expr, ValueDecl *rep,
+	long offset, int scale, int shift)
+{
+	std::vector<ArraySubscriptExpr *> subs;
+	std::vector<uint64_t> strides;
+	uint64_t unit = pointee_element_size(rep->getType(), ast_context);
+	pet_expr *index, *sum;
+	unsigned i;
+
+	if (!unit)
+		return NULL;
+
+	arena_strides(expr, ast_context, subs, strides);
+
+	sum = pet_expr_new_int(isl_val_int_from_si(ctx,
+						   offset / (long) unit + shift));
+	for (i = 0; i < subs.size(); ++i) {
+		pet_expr *term = extract_expr(subs[i]->getIdx());
+		uint64_t f = strides[i] / unit;
+
+		if (f != 1)
+			term = pet_expr_new_binary(0, pet_op_mul, term,
+			    pet_expr_new_int(isl_val_int_from_si(ctx, f)));
+		sum = pet_expr_new_binary(0, pet_op_add, sum, term);
+	}
+
+	index = extract_index_expr(rep);
+	index = pet_expr_access_subscript(index, sum);
+
+	return pet_expr_access_from_index(rep->getType(), index, ast_context);
+}
+
+/* How many representative elements does one element of "expr" cover?
+ * 0 if this storage cannot be described, and the reason has been reported.
+ *
+ * Every boundary of the arena path is drawn here, in one place, so that a
+ * shape which cannot be modelled costs a diagnostic and a non-zero exit
+ * rather than a plausible wrong answer.  A guard that reports and then
+ * carries on is worse than no guard: on the union path that produced four
+ * warnings, exit 0, and an index read back as float bits.
+ */
+int PetScan::arena_scale(Expr *expr, ValueDecl *rep, long offset)
+{
+	std::vector<ArraySubscriptExpr *> subs;
+	std::vector<uint64_t> strides;
+	ValueDecl *decl = arena_array_root(expr);
+	uint64_t unit = pointee_element_size(rep->getType(), ast_context);
+	uint64_t mine = pointee_element_size(decl->getType(), ast_context);
+	unsigned i;
+
+	if (!unit || !mine)
+		return 0;
+	if (offset < 0 || (uint64_t) offset % unit) {
+		report_arena(expr, decl->getName().str() + " is at byte offset "
+			+ std::to_string(offset) + ", which is not a whole "
+			"number of the " + std::to_string(unit) + "-byte "
+			"elements of the array it shares storage with");
+		return 0;
+	}
+	if (mine % unit) {
+		report_arena(expr, "an element of " + decl->getName().str()
+			+ " is " + std::to_string(mine) + " bytes, which is "
+			"not a whole number of the " + std::to_string(unit)
+			+ "-byte elements of the array it shares storage with");
+		return 0;
+	}
+
+	arena_strides(expr, ast_context, subs, strides);
+	for (i = 0; i < strides.size(); ++i)
+		if (strides[i] % unit) {
+			report_arena(expr, "dimension " + std::to_string(i)
+				+ " of " + decl->getName().str() + " steps "
+				+ std::to_string(strides[i]) + " bytes, which "
+				"is not a whole number of the "
+				+ std::to_string(unit) + "-byte elements of "
+				"the array it shares storage with");
+			return 0;
+		}
+
+	return mine / unit;
+}
+
+/* Construct an access pet_expr from "expr", an access to an array that shares
+ * storage with another one.
+ *
+ * The INDEX keeps naming the array the source names, because the index is
+ * what gets printed and the emitted C must come back unchanged.  The ACCESS
+ * RELATION is replaced by one over the representative, because the relation
+ * is what the dependence analysis reads.  pet keeps those two apart already,
+ * which is what makes this possible without touching a single subscript in
+ * the generated program.
+ *
+ * The relation covers a RANGE of representative elements when this array's
+ * element is wider than the representative's: an f32 store over an f16
+ * representative touches elements 2i and 2i+1, and naming only 2i understates
+ * the write's footprint, which licenses exactly the reordering this exists to
+ * forbid.
+ */
+__isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
+	__isl_take pet_expr *index, ValueDecl *rep, long offset)
+{
+	pet_expr *access, *base;
+	isl_union_map *relation;
+	isl_bool was_read, was_write;
+	enum pet_expr_access_type type[] = { pet_expr_access_may_read,
+					     pet_expr_access_may_write,
+					     pet_expr_access_must_write };
+	int i, scale, shift;
+
+	access = pet_expr_access_from_index(expr->getType(), index,
+					    ast_context);
+	scale = arena_scale(expr, rep, offset);
+	relation = NULL;
+	for (shift = 0; scale > 0 && shift < scale; ++shift) {
+		isl_union_map *part;
+
+		base = arena_storage(expr, rep, offset, scale, shift);
+		if (getenv("PET_DEBUG_ARENA")) {
+			fprintf(stderr, "pet arena: the access\n");
+			pet_expr_dump(access);
+			fprintf(stderr, "pet arena: storage %d of %d at "
+				"offset %ld\n", shift, scale, offset);
+			pet_expr_dump(base);
+		}
+		if (!base)
+			break;
+		/* THE DEPENDENT ACCESS, not the may-read: the latter projects
+		 * out the argument dimensions, and a relation with the
+		 * argument gone pins down no element, so the write stops being
+		 * live out.  Learned on the union path, where it produced
+		 * "Eliminated dead instances" for a store into the caller's
+		 * memory.
+		 */
+		part = pet_expr_access_get_dependent_access(base,
+						pet_expr_access_may_read);
+		pet_expr_free(base);
+		if (!part)
+			break;
+		relation = relation ? isl_union_map_union(relation, part) : part;
+	}
+	if (!access || scale <= 0 || shift != scale || !relation) {
+		pet_expr_free(access);
+		isl_union_map_free(relation);
+		return NULL;
+	}
+
+	was_read = pet_expr_access_is_read(access);
+	was_write = pet_expr_access_is_write(access);
+
+	if (getenv("PET_DEBUG_ARENA")) {
+		fprintf(stderr, "pet arena: the relation it installs\n");
+		isl_union_map_dump(relation);
+	}
+
+	for (i = 0; i < 3; ++i)
+		access = pet_expr_access_set_access(access, type[i],
+						isl_union_map_copy(relation));
+	isl_union_map_free(relation);
+
+	access = pet_expr_access_set_read(access, was_read);
+	access = pet_expr_access_set_write(access, was_write);
+
+	return access;
+}
+
 __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 {
 	pet_expr *index;
+	ValueDecl *rep;
+	long offset = 0;
 
 	index = extract_index_expr(expr);
 
@@ -1529,6 +1858,10 @@ __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 
 	if (union_field(expr))
 		return access_from_union_member(expr, index);
+
+	rep = arena_member(expr, &offset);
+	if (rep)
+		return access_from_arena(expr, index, rep, offset);
 
 	return pet_expr_access_from_index(expr->getType(), index, ast_context);
 }
