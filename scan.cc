@@ -1979,6 +1979,55 @@ static Expr *extract_addr_of_arg(Expr *expr)
 	return op->getSubExpr();
 }
 
+/* If "expr" is a pointer with an integer added to it, return the
+ * subscript naming the same place, and NULL otherwise.
+ *
+ * "p + i" and "&p[i]" are one address written two ways, and only the
+ * second was an access as far as a scop was concerned: the first
+ * reached the test for one as a BinaryOperator and the call taking it
+ * was refused.  A graph of an inference engine hands its kernels
+ * "(const block_q8_0 *) (w + t*4352)" twenty-four times over.
+ *
+ * The subscript is built and given to the reader that already exists,
+ * rather than the access being assembled here.  Assembling it here is
+ * what a first attempt did and it produced an access of one dimension
+ * more than the same argument written "&w[i*i]": the base already
+ * carried a dimension and a subscript went on top of it.  Two builders
+ * of one representation disagree sooner or later, and silently -- it
+ * shows up as a scop that is subtly the wrong shape.  So there is one
+ * builder and this hands it its usual input.
+ *
+ * Whether the offset is affine is not asked, because a subscript does
+ * not ask it either: that question is answered further along and
+ * answered alike for both spellings, which is the point of writing one
+ * as the other.
+ */
+static Expr *subscript_from_pointer_offset(ASTContext &ast_context,
+	Expr *expr)
+{
+	BinaryOperator *bin = dyn_cast<BinaryOperator>(expr);
+	Expr *base, *offset;
+
+	if (!bin || bin->getOpcode() != BO_Add)
+		return NULL;
+
+	if (bin->getLHS()->getType()->isPointerType() &&
+	    bin->getRHS()->getType()->isIntegerType()) {
+		base = bin->getLHS();
+		offset = bin->getRHS();
+	} else if (bin->getRHS()->getType()->isPointerType() &&
+		   bin->getLHS()->getType()->isIntegerType()) {
+		base = bin->getRHS();
+		offset = bin->getLHS();
+	} else {
+		return NULL;
+	}
+
+	return new (ast_context) ArraySubscriptExpr(base, offset,
+			base->getType()->getPointeeType(),
+			VK_LValue, OK_Ordinary, expr->getEndLoc());
+}
+
 /* Construct a pet_expr corresponding to the function call argument "expr".
  * The argument appears in position "pos" of a call to function "fd".
  *
@@ -3204,8 +3253,11 @@ int PetScan::set_inliner_arguments(pet_inliner &inliner, CallExpr *call,
 			continue;
 		}
 		arg = pet_clang_strip_casts(arg);
-		sub = extract_addr_of_arg(arg);
+		sub = subscript_from_pointer_offset(ast_context, arg);
 		if (sub) {
+			is_addr = 1;
+			arg = sub;
+		} else if ((sub = extract_addr_of_arg(arg))) {
 			is_addr = 1;
 			arg = pet_clang_strip_casts(sub);
 		}
