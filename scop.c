@@ -2453,7 +2453,35 @@ static __isl_give isl_union_map *expr_collect_access(__isl_keep pet_expr *expr,
 {
 	isl_union_map *access;
 
-	access = pet_expr_access_get_access(expr, type);
+	if (type == pet_expr_access_plain_may_write ||
+	    type == pet_expr_access_plain_must_write) {
+		isl_space *space;
+		isl_map *map;
+
+		access = pet_expr_access_plain_write_relation(expr);
+		if (!access)
+			return isl_union_map_union(accesses,
+					isl_union_map_empty(
+					    isl_union_set_get_space(domain)));
+		/* The index of an access with expression arguments carries
+		 * them wrapped into its domain; unwrap and project them off
+		 * the way get_access does, so the result intersects the
+		 * statement domains.  After the context evaluation a plain
+		 * subscript usually has a plain domain and nothing to wrap.
+		 */
+		space = isl_multi_pw_aff_get_space(expr->acc.index);
+		space = isl_space_domain(space);
+		if (isl_space_is_wrapping(space)) {
+			map = isl_map_universe(isl_space_unwrap(space));
+			map = isl_map_domain_map(map);
+			access = isl_union_map_apply_domain(access,
+						    isl_union_map_from_map(map));
+		} else {
+			isl_space_free(space);
+		}
+	} else {
+		access = pet_expr_access_get_access(expr, type);
+	}
 	access = isl_union_map_intersect_domain(access,
 						isl_union_set_copy(domain));
 	if (tag)
@@ -2500,12 +2528,27 @@ static int expr_collect_accesses(__isl_keep pet_expr *expr, void *user)
 
 	if (pet_expr_is_affine(expr))
 		return 0;
-	if (data->type == pet_expr_access_must_write && expr->n_arg != 0)
+	if ((data->type == pet_expr_access_must_write ||
+	     data->type == pet_expr_access_plain_must_write) &&
+	    expr->n_arg != 0)
 		return 0;
 
 	if ((data->type == pet_expr_access_may_read && expr->acc.read) ||
 	    ((data->type == pet_expr_access_may_write ||
-	      data->type == pet_expr_access_must_write) && expr->acc.write))
+	      data->type == pet_expr_access_must_write) && expr->acc.write) ||
+	    /* THE PLAIN VIEW IS BUILT LAZILY, from the index as it stands
+	     * after the context evaluation: at extraction time the index
+	     * carries an empty domain and a relation built there
+	     * intersects no statement domain.  The index still names the
+	     * array the source wrote -- composition replaced the relation,
+	     * never the printed subscripts -- so the relation built here is
+	     * over the right array.  Guarded on write so that reads never
+	     * grow one.
+	     */
+	    ((data->type == pet_expr_access_plain_may_write ||
+	      data->type == pet_expr_access_plain_must_write) &&
+	     expr->acc.write &&
+	     pet_expr_access_plain_write_relation(expr)))
 		data->accesses = expr_collect_access(expr,
 						data->type, data->tag,
 						data->accesses, data->domain);
@@ -2544,6 +2587,7 @@ static __isl_give isl_union_map *stmt_collect_accesses(struct pet_stmt *stmt,
 	data.accesses = isl_union_map_empty(dim);
 
 	if (type == pet_expr_access_must_write ||
+	    type == pet_expr_access_plain_must_write ||
 	    type == pet_expr_access_killed)
 		must = 1;
 	else
@@ -2785,6 +2829,29 @@ __isl_give isl_union_map *pet_scop_get_may_writes(struct pet_scop *scop)
 __isl_give isl_union_map *pet_scop_get_must_writes(struct pet_scop *scop)
 {
 	return scop_collect_accesses(scop, pet_expr_access_must_write, 0);
+}
+
+/* Return the potential write access relation OVER THE ARRAYS THE SOURCE
+ * NAMES, for the liveness computations only.
+ *
+ * scop_collect_accesses routes plain_may_write through the same statement
+ * and expression walk, but each access contributes only when it carries a
+ * plain relation -- which is exactly the accesses an annotation composed
+ * onto a representative.  An ordinary access contributes nothing here and
+ * is covered by the caller falling back to the composed may_writes.
+ */
+__isl_give isl_union_map *pet_scop_get_plain_may_writes(struct pet_scop *scop)
+{
+	return scop_collect_accesses(scop, pet_expr_access_plain_may_write, 0);
+}
+
+/* Return the definite write access relation OVER THE ARRAYS THE SOURCE
+ * NAMES, for the liveness computations only.  See
+ * pet_scop_get_plain_may_writes.
+ */
+__isl_give isl_union_map *pet_scop_get_plain_must_writes(struct pet_scop *scop)
+{
+	return scop_collect_accesses(scop, pet_expr_access_plain_must_write, 0);
 }
 
 /* Return the definite kill access relation.

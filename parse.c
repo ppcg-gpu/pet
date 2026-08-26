@@ -468,6 +468,17 @@ static __isl_give pet_expr *extract_expr_access(isl_ctx *ctx,
 			expr = pet_expr_access_set_access(expr,
 				    pet_expr_access_must_write,
 				    extract_union_map(ctx, document, value));
+		/* The plain relations are read straight into their slots:
+		 * set_access would route them through the marking of read and
+		 * write flags, and these are a second view of writes already
+		 * marked by the composed relations above.
+		 */
+		if (!strcmp((char *) key->data.scalar.value, "plain_may_write"))
+			expr->acc.access[pet_expr_access_plain_may_write] =
+					    extract_union_map(ctx, document, value);
+		if (!strcmp((char *) key->data.scalar.value, "plain_must_write"))
+			expr->acc.access[pet_expr_access_plain_must_write] =
+					    extract_union_map(ctx, document, value);
 		if (!strcmp((char *) key->data.scalar.value, "killed"))
 			expr = pet_expr_access_set_access(expr,
 				    pet_expr_access_killed,

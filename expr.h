@@ -62,7 +62,7 @@ struct pet_expr_access {
 	unsigned read : 1;
 	unsigned write : 1;
 	unsigned kill : 1;
-	isl_union_map *access[pet_expr_access_end];
+	isl_union_map *access[pet_expr_access_plain_end];
 };
 /* Representation of call expression.
  *
@@ -183,6 +183,10 @@ isl_stat pet_expr_access_foreach_data_space(__isl_keep pet_expr *expr,
 isl_bool pet_expr_access_has_any_access_relation(__isl_keep pet_expr *expr);
 __isl_give isl_union_map *pet_expr_access_get_dependent_access(
 	__isl_keep pet_expr *expr, enum pet_expr_access_type type);
+/* The write relation built directly from the index, ignoring the
+ * read/write flags, which are only set during context evaluation. */
+__isl_give isl_union_map *pet_expr_access_plain_write_relation(
+	__isl_keep pet_expr *expr);
 __isl_give isl_map *pet_expr_access_get_may_access(__isl_keep pet_expr *expr);
 
 __isl_give pet_expr *pet_expr_map_top_down(__isl_take pet_expr *expr,

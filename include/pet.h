@@ -659,6 +659,14 @@ __isl_give isl_union_map *pet_scop_get_tagged_may_reads(
 __isl_give isl_union_map *pet_scop_get_may_writes(__isl_keep pet_scop *scop);
 /* Return the definite write access relation. */
 __isl_give isl_union_map *pet_scop_get_must_writes(__isl_keep pet_scop *scop);
+/* Return the potential write access relation over the arrays the source
+ * names, for the liveness computations only. */
+__isl_give isl_union_map *pet_scop_get_plain_may_writes(
+	__isl_keep pet_scop *scop);
+/* Return the definite write access relation over the arrays the source
+ * names, for the liveness computations only. */
+__isl_give isl_union_map *pet_scop_get_plain_must_writes(
+	__isl_keep pet_scop *scop);
 /* Return the tagged potential write access relation. */
 __isl_give isl_union_map *pet_scop_get_tagged_may_writes(
 	__isl_keep pet_scop *scop);

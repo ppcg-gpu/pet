@@ -1641,6 +1641,45 @@ static ValueDecl *arena_member(Expr *expr, long *offset)
 	return pet_arena_lookup(decl, offset);
 }
 
+/* Is "expr" an access to an array named in ANY arena annotation --
+ * including the representative, which arena_member answers NULL for?
+ */
+static int arena_group_member(Expr *expr)
+{
+	ValueDecl *decl = arena_array_root(expr);
+	long offset;
+
+	if (!decl)
+		return 0;
+
+	return pet_arena_lookup(decl, &offset) != NULL ||
+	       pet_arena_map.count(decl) != 0;
+}
+
+/* Stash the write relations of the ACCESS expression "access", built
+ * directly from its index, as its plain ones, for the liveness
+ * computations in ppcg.
+ *
+ * Direct slot assignment: set_access would re-mark the read/write flags,
+ * which at extraction time have not been set at all -- the context
+ * evaluation sets them later -- and the flag-gated dependent getters
+ * would answer empty for exactly the writes this exists to keep.  The
+ * same relation goes into both slots; may/must is a distinction the
+ * flags make, and the plain view carries the footprint either way.
+ */
+static void stash_plain_access(pet_expr *access)
+{
+	isl_union_map *plain;
+
+	plain = pet_expr_access_plain_write_relation(access);
+	if (!plain)
+		plain = isl_union_map_empty(
+				pet_expr_access_get_parameter_space(access));
+	access->acc.access[pet_expr_access_plain_may_write] =
+					isl_union_map_copy(plain);
+	access->acc.access[pet_expr_access_plain_must_write] = plain;
+}
+
 /* The byte stride of each subscript of "expr", outermost first.
  *
  * The stride of a subscript is the size of what it yields: for
@@ -1845,6 +1884,14 @@ __isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
 		isl_union_map_dump(relation);
 	}
 
+	/* THE PLAIN RELATION, FOR LIVENESS ONLY: the relation over the
+	 * array the index names, stashed before the composed one replaces
+	 * the may/must_write slots.  Not gated on was_write: the flags are
+	 * set later, by the context evaluation, and this runs at extraction.
+	 * See stash_plain_access.
+	 */
+	stash_plain_access(access);
+
 	for (i = 0; i < 3; ++i)
 		access = pet_expr_access_set_access(access, type[i],
 						isl_union_map_copy(relation));
@@ -1858,7 +1905,7 @@ __isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
 
 __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 {
-	pet_expr *index;
+	pet_expr *index, *access;
 	ValueDecl *rep;
 	long offset = 0;
 
@@ -1873,6 +1920,24 @@ __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 	rep = arena_member(expr, &offset);
 	if (rep)
 		return access_from_arena(expr, index, rep, offset);
+
+	/* A REPRESENTATIVE IS IN ITS OWN ARENA.  pet_arena_lookup answers
+	 * NULL for it on purpose -- composing an array into itself at
+	 * offset 0 is the identity -- so it takes the ordinary path here.
+	 * But it is still part of an annotated group, and the liveness
+	 * view in ppcg collects each member's plain relation; a
+	 * representative without one drops out of that view and its writes
+	 * are judged over the composed relations, where another member's
+	 * later write covers them (the 402-node defect).  Stashing the
+	 * ordinary relation as its plain one keeps it in.
+	 */
+	if (arena_group_member(expr)) {
+		access = pet_expr_access_from_index(expr->getType(), index,
+						    ast_context);
+		if (access)
+			stash_plain_access(access);
+		return access;
+	}
 
 	return pet_expr_access_from_index(expr->getType(), index, ast_context);
 }

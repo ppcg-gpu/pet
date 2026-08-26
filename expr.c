@@ -526,6 +526,18 @@ static __isl_give pet_expr *pet_expr_dup(__isl_keep pet_expr *expr)
 			dup = pet_expr_access_set_access(dup, type,
 				    isl_union_map_copy(expr->acc.access[type]));
 		}
+		/* The plain relations past _end are copied directly rather than
+		 * through pet_expr_access_set_access, which marks the
+		 * expression read/write by the relation it is handed; these
+		 * are a second view of writes already marked, not new ones.
+		 */
+		for (type = pet_expr_access_end;
+		     type < pet_expr_access_plain_end; ++type) {
+			if (!expr->acc.access[type])
+				continue;
+			dup->acc.access[type] =
+				    isl_union_map_copy(expr->acc.access[type]);
+		}
 		dup = pet_expr_access_set_read(dup, expr->acc.read);
 		dup = pet_expr_access_set_write(dup, expr->acc.write);
 		dup = pet_expr_access_set_kill(dup, expr->acc.kill);
@@ -593,7 +605,7 @@ __isl_null pet_expr *pet_expr_free(__isl_take pet_expr *expr)
 	case pet_expr_access:
 		isl_id_free(expr->acc.ref_id);
 		for (type = pet_expr_access_begin;
-		     type < pet_expr_access_end; ++type)
+		     type < pet_expr_access_plain_end; ++type)
 			isl_union_map_free(expr->acc.access[type]);
 		isl_multi_pw_aff_free(expr->acc.index);
 		break;
@@ -978,6 +990,33 @@ static __isl_give pet_expr *introduce_access_relations(
 		return pet_expr_free(expr);
 
 	return expr;
+}
+
+/* Build and return the write access relation of "expr" DIRECTLY from the
+ * index expression, whatever the read/write flags currently say.
+ *
+ * The flags are set by the context evaluation, which runs after the whole
+ * tree is extracted, so a composition at extraction time cannot ask for a
+ * dependent write relation through the flag-gated getters: they answer
+ * "empty" for an access not yet marked write.  This computes the same
+ * relation introduce_access_relations would -- index mapped to elements,
+ * range extended to the depth -- and leaves every flag alone.  It exists
+ * for the plain slots: the liveness view in ppcg needs the relation over
+ * the array the source names, stashed before the composed relation
+ * replaces the ordinary slots.
+ */
+__isl_give isl_union_map *pet_expr_access_plain_write_relation(
+	__isl_keep pet_expr *expr)
+{
+	isl_union_map *access;
+
+	if (!expr)
+		return NULL;
+	if (expr->type != pet_expr_access)
+		isl_die(pet_expr_get_ctx(expr), isl_error_invalid,
+			"not an access expression", return NULL);
+
+	return construct_access_relation(expr);
 }
 
 /* Return a hash value that digests "expr".

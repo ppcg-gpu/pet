@@ -540,6 +540,18 @@ static int emit_access_expr(yaml_emitter_t *emitter, __isl_keep pet_expr *expr)
 	    emit_named_union_map(emitter, "must_write",
 		    expr->acc.access[pet_expr_access_must_write]) < 0)
 		return -1;
+	/* The plain relations are printed whenever they differ from the
+	 * composed ones, which is exactly when they exist: they are only
+	 * stashed by the arena composition, never by an ordinary access.
+	 */
+	if (expr->acc.access[pet_expr_access_plain_may_write] &&
+	    emit_named_union_map(emitter, "plain_may_write",
+		    expr->acc.access[pet_expr_access_plain_may_write]) < 0)
+		return -1;
+	if (expr->acc.access[pet_expr_access_plain_must_write] &&
+	    emit_named_union_map(emitter, "plain_must_write",
+		    expr->acc.access[pet_expr_access_plain_must_write]) < 0)
+		return -1;
 	if (emit_named_multi_pw_aff(emitter, "index", expr->acc.index) < 0)
 		return -1;
 	depth = isl_multi_pw_aff_dim(expr->acc.index, isl_dim_out);
