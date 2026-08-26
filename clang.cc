@@ -102,14 +102,53 @@ RecordDecl *pet_clang_record_decl(QualType T)
 	return record->getDecl();
 }
 
-/* Strip off all outer casts from "expr" that are either implicit or a no-op.
+/* Strip off all outer casts from "expr" that do not change what is
+ * being referred to: the implicit ones, the no-ops, and a written cast
+ * from one pointer to another.
+ *
+ * A pointer cast is on this list because it says how the memory behind
+ * the pointer is to be read, not which memory that is.  Where a scop
+ * needs to know what an argument refers to -- an inlined call binding
+ * an array parameter -- the cast stands between the reader and the
+ * answer while telling it nothing:
+ *
+ *     ggml_dot_q8_0_blocks((const block_q8_0 *) (&w[i*4352]), ...)
+ *
+ * is w, at that offset, whatever the callee then calls the shape of it.
+ * Before this the cast was where the walk stopped: the argument reached
+ * is_access_expr_type as a CStyleCastExpr, which is not an access, and
+ * the call was refused.  An address-of underneath fared no better,
+ * since the search for one looked at the cast rather than through it.
+ * Three such arguments are what stopped a whole prefill graph.
+ *
+ * A cast that does convert is still not stripped -- an int to a float,
+ * a narrowing, a signedness change -- because there the value that
+ * arrives is not the value that was written, and pretending otherwise
+ * would lose it.  A pointer to a pointer converts nothing.
  */
 Expr *pet_clang_strip_casts(Expr *expr)
 {
-	while (isa<CastExpr>(expr)) {
+	while (true) {
+		/* Parentheses are stripped along with the casts because
+		 * they are written together and mean even less: "(x[i])"
+		 * refers to what "x[i]" refers to.  A cast written over a
+		 * subscript brings its own pair, so a walk that stopped at
+		 * them would get past the cast and no further.
+		 */
+		if (isa<ParenExpr>(expr)) {
+			expr = cast<ParenExpr>(expr)->getSubExpr();
+			continue;
+		}
+		if (!isa<CastExpr>(expr))
+			break;
 		CastExpr *ce = cast<CastExpr>(expr);
 		CastKind kind = ce->getCastKind();
-		if (!isa<ImplicitCastExpr>(expr) && kind != CK_NoOp)
+		bool pointer_to_pointer =
+			ce->getType()->isPointerType() &&
+			ce->getSubExpr()->getType()->isPointerType();
+
+		if (!isa<ImplicitCastExpr>(expr) && kind != CK_NoOp &&
+		    !(kind == CK_BitCast && pointer_to_pointer))
 			break;
 		expr = ce->getSubExpr();
 	}
