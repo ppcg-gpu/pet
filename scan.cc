@@ -1152,18 +1152,90 @@ __isl_give pet_expr *PetScan::extract_expr(FloatingLiteral *expr)
  * bits that were never written -- measured, and kept as
  * tests/pet-union/decl_only for the record.
  */
-static FieldDecl *union_field(Expr *expr)
+/* Put the subscripts of "expr" back on "index", outermost last.
+ *
+ * "expr" is a chain of ArraySubscriptExpr ending in the union member, and
+ * "index" is that member replaced by the canonical one.  The subscripts are
+ * what carries a window's OFFSET -- "g->i[1024]" is the buffer 4096 bytes
+ * into the storage -- so dropping them would collapse every window in the
+ * group onto the first, which is a wrong answer rather than a lost one.
+ */
+__isl_give pet_expr *PetScan::carry_subscripts(Expr *expr,
+	__isl_take pet_expr *index)
 {
-	MemberExpr *member = dyn_cast<MemberExpr>(expr);
+	ArraySubscriptExpr *sub = dyn_cast<ArraySubscriptExpr>(expr);
+
+	if (!sub)
+		return index;
+
+	index = carry_subscripts(sub->getBase()->IgnoreParenImpCasts(), index);
+
+	return pet_expr_access_subscript(index, extract_expr(sub->getIdx()));
+}
+
+/* The union member access at the root of "expr", looking through subscripts,
+ * or NULL if there is none.
+ *
+ * A union member that is an ARRAY is not reached as a MemberExpr: "g->f[i]"
+ * is an ArraySubscriptExpr whose base is the member.  Testing "expr" itself
+ * therefore missed every array member, and those are the interesting ones --
+ * a union of arrays is how one storage holding many buffers at many offsets
+ * is described, with each buffer a window addressed by an offset in the
+ * index.  Measured before this: two float loops either side of a read
+ * through a different member of the same union were fused and the read moved
+ * past them, because the members were two independent arrays.
+ */
+static MemberExpr *union_member_root(Expr *expr)
+{
+	MemberExpr *member;
 	FieldDecl *field;
 
+	while (ArraySubscriptExpr *sub = dyn_cast<ArraySubscriptExpr>(expr))
+		expr = sub->getBase()->IgnoreParenImpCasts();
+
+	member = dyn_cast<MemberExpr>(expr);
 	if (!member)
 		return NULL;
 	field = dyn_cast<FieldDecl>(member->getMemberDecl());
 	if (!field || !field->getParent() || !field->getParent()->isUnion())
 		return NULL;
 
-	return field;
+	return member;
+}
+
+/* Is "expr" a reference to a member of a union?
+ *
+ * The members of a union are one storage read and written under different
+ * types.  A dependence analysis told otherwise is free to exchange a write
+ * through one member with a read through another, and the read then takes
+ * bits that were never written -- measured, and kept as
+ * tests/pet-union/decl_only for the record.
+ */
+static FieldDecl *union_field(Expr *expr)
+{
+	MemberExpr *member = union_member_root(expr);
+
+	if (!member)
+		return NULL;
+
+	return cast<FieldDecl>(member->getMemberDecl());
+}
+
+/* The size in BYTES of what one subscript of "qt" steps over.
+ *
+ * For a scalar member that is the member; for an array member it is the
+ * array's element, because that is what an index counts.  Not
+ * pet_clang_get_type_size: that returns 0 for anything which is not an
+ * integer and a SIGNED BIT WIDTH for anything which is, so it called float
+ * and int32_t different sizes and refused every union in the tree.  Caught
+ * because the refusal fired on the reproducers that were supposed to go
+ * green.
+ */
+static uint64_t element_size(QualType qt, ASTContext &ast_context)
+{
+	QualType elem = ast_context.getBaseElementType(qt);
+
+	return ast_context.getTypeSizeInChars(elem).getQuantity();
 }
 
 /* The storage a union member shares with its siblings, as an access.
@@ -1183,31 +1255,30 @@ static FieldDecl *union_field(Expr *expr)
  * same one.  The arrow is followed the way extract_index_expr follows it, so
  * "b->f" and "(*b).f" would describe the same storage.
  *
- * MEMBERS OF DIFFERENT SIZES ARE REFUSED rather than mismodelled.  Standing
- * one member in for another is exact only while they index the same bytes,
- * and a union of float and int64_t does not: element 1 of one is element 0
- * of the other.  Carrying that needs the index scaled by the element size,
- * which is a different piece of work, and until it exists this says so
- * instead of quietly computing with the wrong extent.
+ * SUBSCRIPTS ARE CARRIED ACROSS.  "g->i[k]" becomes the same subscript on
+ * the canonical member, so a window at an offset stays at that offset: the
+ * offset lives in the index, which is what lets one union describe buffers
+ * that begin at different addresses and overlap each other.
+ *
+ * MEMBERS WHOSE ELEMENTS DIFFER IN SIZE ARE REFUSED rather than mismodelled.
+ * Standing one member in for another is exact only while a subscript steps
+ * over the same bytes in both, and float beside int64_t does not: element 1
+ * of one is inside element 0 of the other.  Carrying that means a relation
+ * onto a RANGE of canonical elements rather than one, which is a different
+ * piece of work, and until it exists this says so instead of quietly
+ * computing with the wrong footprint.
  */
-__isl_give pet_expr *PetScan::union_member_storage(MemberExpr *member)
+__isl_give pet_expr *PetScan::union_member_storage(Expr *expr)
 {
-	FieldDecl *field = cast<FieldDecl>(member->getMemberDecl());
-	RecordDecl *record = field->getParent();
+	MemberExpr *member = union_member_root(expr);
+	RecordDecl *record =
+	    cast<FieldDecl>(member->getMemberDecl())->getParent();
 	FieldDecl *first = NULL;
-	pet_expr *base_index;
+	pet_expr *index;
 	uint64_t size = 0;
 
 	for (auto *f : record->fields()) {
-		/* The size in BYTES.  pet_clang_get_type_size is not that:
-		 * it returns 0 for anything that is not an integer and a
-		 * SIGNED BIT WIDTH for anything that is, so it called float
-		 * and int32_t different sizes and refused every union in the
-		 * tree.  Caught because the refusal fired on the reproducers
-		 * that were supposed to go green.
-		 */
-		uint64_t fsize =
-		    ast_context.getTypeSizeInChars(f->getType()).getQuantity();
+		uint64_t fsize = element_size(f->getType(), ast_context);
 		if (!first) {
 			first = f;
 			size = fsize;
@@ -1219,15 +1290,14 @@ __isl_give pet_expr *PetScan::union_member_storage(MemberExpr *member)
 	if (!first)
 		return NULL;
 
-	base_index = extract_index_expr(member->getBase());
+	index = extract_index_expr(member->getBase());
 	if (member->isArrow())
-		base_index = pet_expr_access_subscript(base_index,
+		index = pet_expr_access_subscript(index,
 					pet_expr_new_int(isl_val_zero(ctx)));
-	base_index = pet_expr_access_member(base_index,
-					pet_id_from_decl(ctx, first));
+	index = pet_expr_access_member(index, pet_id_from_decl(ctx, first));
+	index = carry_subscripts(expr, index);
 
-	return pet_expr_access_from_index(first->getType(), base_index,
-					  ast_context);
+	return pet_expr_access_from_index(first->getType(), index, ast_context);
 }
 
 /* Construct an access pet_expr from "expr", an access to a member of a union.
@@ -1258,7 +1328,7 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 
 	access = pet_expr_access_from_index(expr->getType(), index,
 					    ast_context);
-	base = union_member_storage(cast<MemberExpr>(expr));
+	base = union_member_storage(expr);
 	/* PET_DEBUG_UNION: THE TWO EXPRESSIONS AND THE RELATION BETWEEN THEM.
 	 *
 	 * This function is where a union's members are made to share storage,
