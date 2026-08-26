@@ -614,6 +614,7 @@ struct PragmaArenaHandler : public PragmaHandler {
 		while (token.isNot(tok::eod)) {
 			ValueDecl *vd;
 			long offset;
+			int neg = 0;
 
 			vd = get_value_decl(sema, token);
 			if (!vd) {
@@ -621,11 +622,33 @@ struct PragmaArenaHandler : public PragmaHandler {
 				return;
 			}
 			PP.Lex(token);
+			/* A MEMBER MAY BEGIN BEFORE THE REPRESENTATIVE.
+			 *
+			 * The representative has to be the member with the
+			 * SMALLEST element, because an access through a
+			 * smaller one lands inside one of its elements and
+			 * would need a floored index.  Demanding that it also
+			 * sit at offset 0 is one requirement too many:
+			 * measured on a 402-node graph, one storage group of
+			 * twelve -- the 70-buffer one that crashes the rung --
+			 * has a 4-byte member first and a 2-byte member
+			 * further in.  So offsets are relative to the
+			 * representative, and a member that begins before it
+			 * has a negative one.  The minus arrives as a token
+			 * of its own; without this the whole annotation was
+			 * refused and the aliasing it carries was lost.
+			 */
+			if (token.is(tok::minus)) {
+				neg = 1;
+				PP.Lex(token);
+			}
 			if (token.isNot(tok::numeric_constant)) {
 				unsupported(PP, token.getLocation());
 				return;
 			}
 			offset = strtol(token.getLiteralData(), NULL, 10);
+			if (neg)
+				offset = -offset;
 			seen.push_back(std::make_pair(vd, offset));
 			if (offset == 0 && !rep)
 				rep = vd;

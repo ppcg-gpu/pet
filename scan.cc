@@ -1732,7 +1732,18 @@ int PetScan::arena_scale(Expr *expr, ValueDecl *rep, long offset)
 
 	if (!unit || !mine)
 		return 0;
-	if (offset < 0 || (uint64_t) offset % unit) {
+	/* A NEGATIVE OFFSET IS ORDINARY, and only its remainder matters.
+	 *
+	 * This refused every negative offset outright, from the days when the
+	 * representative had to sit at offset 0.  It no longer does: it is the
+	 * member with the SMALLEST element, because an access through a
+	 * smaller one would land inside one of its elements, and members that
+	 * begin before it therefore have negative offsets.  The question is
+	 * the same as for a positive offset -- does it divide into whole
+	 * elements -- and the cast to uint64_t made -12288 enormous, so the
+	 * guard rejected an offset that is exactly -6144 elements.
+	 */
+	if (offset % (long) unit) {
 		report_arena(expr, decl->getName().str() + " is at byte offset "
 			+ std::to_string(offset) + ", which is not a whole "
 			"number of the " + std::to_string(unit) + "-byte "
