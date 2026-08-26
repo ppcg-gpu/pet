@@ -461,9 +461,17 @@ struct ScopLocList {
  * has, and a position is no name: it moves when a line is added above
  * it, and two scops of one file are told apart only by counting.
  *
- * Anything other than an identifier on the line is refused rather than
- * passed over, since a name that was written and not read would leave
- * the scop under a name the caller does not know it by.
+ * Anything else on the line is warned about and then left behind: the
+ * scop is taken exactly as it would have been had nothing been written
+ * after the pragma.  Refusing the scop outright would answer a name
+ * nobody could read by throwing away a region that was marked by hand
+ * and is perfectly good, and the warning is enough to say the name did
+ * not take.
+ *
+ * A name is dropped rather than half kept when what follows it is not
+ * the end of the line, so that "scop a b" is the unnamed scop and not
+ * the scop called a.  Reading the first word of a line that was not
+ * understood would name the scop by guesswork.
  */
 struct PragmaScopHandler : public PragmaHandler {
 	ScopLocList &scops;
@@ -481,15 +489,15 @@ struct PragmaScopHandler : public PragmaHandler {
 
 		PP.Lex(token);
 		if (token.isNot(tok::eod)) {
-			if (token.isNot(tok::identifier)) {
-				unsupported(PP, token.getLocation());
-				return;
+			if (token.is(tok::identifier)) {
+				name = token.getIdentifierInfo()->getName().str();
+				PP.Lex(token);
 			}
-			name = token.getIdentifierInfo()->getName().str();
-			PP.Lex(token);
 			if (token.isNot(tok::eod)) {
 				unsupported(PP, token.getLocation());
-				return;
+				name.clear();
+				while (token.isNot(tok::eod))
+					PP.Lex(token);
 			}
 		}
 

@@ -1,0 +1,70 @@
+start: 855
+end: 949
+indent: "\t"
+context: '[n] -> {  : -2147483648 <= n <= 2147483647 }'
+schedule: '{ domain: "[n] -> { S_1[]; S_0[i] : 0 <= i < n; S_2[] }", child: { sequence:
+  [ { filter: "[n] -> { S_0[i] }", child: { schedule: "[n] -> L_0[{ S_0[i] -> [(i)]
+  }]" } }, { filter: "[n] -> { S_1[] }" }, { filter: "[n] -> { S_2[] }" } ] } }'
+arrays:
+- context: '{  :  }'
+  extent: '[n] -> { a[i0] : i0 >= 0 }'
+  element_type: int
+  element_size: 4
+- context: '{  :  }'
+  extent: '[n] -> { b[i0] : i0 >= 0 }'
+  element_type: int
+  element_size: 4
+- context: '{  :  }'
+  extent: '{ s[] }'
+  element_type: int
+  element_size: 4
+statements:
+- line: 23
+  domain: '[n] -> { S_0[i] : 0 <= i < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: +=
+      arguments:
+      - type: access
+        index: '[n] -> { S_0[i] -> s[] }'
+        reference: __pet_ref_0
+        read: 1
+        write: 1
+      - type: access
+        index: '[n] -> { S_0[i] -> a[(i)] }'
+        reference: __pet_ref_1
+        read: 1
+        write: 0
+- line: 24
+  domain: '{ S_1[] }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_1[] -> b[(0)] }'
+        reference: __pet_ref_2
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_1[] -> s[] }'
+        reference: __pet_ref_3
+        read: 1
+        write: 0
+- line: -1
+  domain: '{ S_2[] }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_2[] -> s[] }'
+        index: '[n] -> { S_2[] -> s[] }'
+        reference: __pet_ref_4
+        kill: 1
