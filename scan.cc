@@ -1346,9 +1346,21 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 		fprintf(stderr, "pet union member: the storage it is given\n");
 		pet_expr_dump(base);
 	}
+	/* A UNION THIS CANNOT DESCRIBE MUST NOT BE DESCRIBED WRONGLY.
+	 *
+	 * This returned the access without the shared relation, so a union
+	 * union_member_storage had just REFUSED went on to be scheduled with
+	 * its members as independent arrays -- which is the whole defect the
+	 * union path exists to remove.  Measured: a union of uint16_t beside
+	 * float printed four warnings, exited 0, and read 16384 out of an
+	 * index whose value was 7 -- 0x4000, the low half of the 1026.0f that
+	 * had been written over it.  A loud warning beside a wrong answer is
+	 * the silent third outcome wearing a diagnostic.
+	 */
 	if (!access || !base) {
+		pet_expr_free(access);
 		pet_expr_free(base);
-		return access;
+		return NULL;
 	}
 
 	was_read = pet_expr_access_is_read(access);
