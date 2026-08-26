@@ -415,6 +415,25 @@ void PetScan::report_unsupported_unary_operator(Stmt *stmt)
 	report(stmt, id);
 }
 
+/* Report a union whose members are not all the same size, unless autodetect
+ * is set.
+ *
+ * One member stands for the shared storage of all of them, which is exact
+ * only while they index the same bytes.  Members of different sizes need the
+ * index scaled by the element size, and until that exists this refuses
+ * rather than computing with the wrong extent.
+ */
+void PetScan::report_unsupported_union_member_size(Stmt *stmt)
+{
+	DiagnosticsEngine &diag = PP.getDiagnostics();
+	unsigned id = diag.getCustomDiagID(DiagnosticsEngine::Warning,
+			       "a union whose members differ in size is not "
+			       "supported: the members share storage and the "
+			       "index would have to be scaled by the element "
+			       "size");
+	report(stmt, id);
+}
+
 /* Report an unsupported binary operator, unless autodetect is set.
  */
 void PetScan::report_unsupported_binary_operator(Stmt *stmt)
@@ -1147,6 +1166,70 @@ static FieldDecl *union_field(Expr *expr)
 	return field;
 }
 
+/* The storage a union member shares with its siblings, as an access.
+ *
+ * ONE MEMBER IS CHOSEN TO STAND FOR THE STORAGE, and it is the first.
+ *
+ * The obvious base is the union object itself, and that is what this did.
+ * It works when the union is an object -- pet has an array for it -- and
+ * fails when the union is reached through a pointer: the relation lands on
+ * a space that names no array pet knows, so nothing is live-out through it
+ * and ppcg reports "Eliminated dead instances: { S_2[] }" for a write to the
+ * CALLER'S memory.  Measured with --verbose, which is how this was found;
+ * the same kernel with `struct` in place of `union` keeps the statement.
+ *
+ * Naming one member instead makes the relation land on an array pet
+ * declares in either case, and the members alias because they all name the
+ * same one.  The arrow is followed the way extract_index_expr follows it, so
+ * "b->f" and "(*b).f" would describe the same storage.
+ *
+ * MEMBERS OF DIFFERENT SIZES ARE REFUSED rather than mismodelled.  Standing
+ * one member in for another is exact only while they index the same bytes,
+ * and a union of float and int64_t does not: element 1 of one is element 0
+ * of the other.  Carrying that needs the index scaled by the element size,
+ * which is a different piece of work, and until it exists this says so
+ * instead of quietly computing with the wrong extent.
+ */
+__isl_give pet_expr *PetScan::union_member_storage(MemberExpr *member)
+{
+	FieldDecl *field = cast<FieldDecl>(member->getMemberDecl());
+	RecordDecl *record = field->getParent();
+	FieldDecl *first = NULL;
+	pet_expr *base_index;
+	uint64_t size = 0;
+
+	for (auto *f : record->fields()) {
+		/* The size in BYTES.  pet_clang_get_type_size is not that:
+		 * it returns 0 for anything that is not an integer and a
+		 * SIGNED BIT WIDTH for anything that is, so it called float
+		 * and int32_t different sizes and refused every union in the
+		 * tree.  Caught because the refusal fired on the reproducers
+		 * that were supposed to go green.
+		 */
+		uint64_t fsize =
+		    ast_context.getTypeSizeInChars(f->getType()).getQuantity();
+		if (!first) {
+			first = f;
+			size = fsize;
+		} else if (fsize != size) {
+			report_unsupported_union_member_size(member);
+			return NULL;
+		}
+	}
+	if (!first)
+		return NULL;
+
+	base_index = extract_index_expr(member->getBase());
+	if (member->isArrow())
+		base_index = pet_expr_access_subscript(base_index,
+					pet_expr_new_int(isl_val_zero(ctx)));
+	base_index = pet_expr_access_member(base_index,
+					pet_id_from_decl(ctx, first));
+
+	return pet_expr_access_from_index(first->getType(), base_index,
+					  ast_context);
+}
+
 /* Construct an access pet_expr from "expr", an access to a member of a union.
  *
  * The INDEX keeps the member, because the index is what is printed and
@@ -1175,7 +1258,24 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 
 	access = pet_expr_access_from_index(expr->getType(), index,
 					    ast_context);
-	base = extract_access_expr(cast<MemberExpr>(expr)->getBase());
+	base = union_member_storage(cast<MemberExpr>(expr));
+	/* PET_DEBUG_UNION: THE TWO EXPRESSIONS AND THE RELATION BETWEEN THEM.
+	 *
+	 * This function is where a union's members are made to share storage,
+	 * and when it is wrong the symptom is a statement that is simply not
+	 * in the scop.  Nothing about that says which member, which base, or
+	 * what relation was installed, and the search for it was a gdb session
+	 * over generated C.  Under this variable the access, the storage it is
+	 * pointed at, and the relation that joins them are all printed, and
+	 * the difference that mattered -- an argument dimension present or
+	 * projected away -- is visible in one run.
+	 */
+	if (getenv("PET_DEBUG_UNION")) {
+		fprintf(stderr, "pet union member: the access\n");
+		pet_expr_dump(access);
+		fprintf(stderr, "pet union member: the storage it is given\n");
+		pet_expr_dump(base);
+	}
 	if (!access || !base) {
 		pet_expr_free(base);
 		return access;
@@ -1184,8 +1284,28 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 	was_read = pet_expr_access_is_read(access);
 	was_write = pet_expr_access_is_write(access);
 
-	relation = pet_expr_access_get_may_read(base);
+	/* THE DEPENDENT ACCESS, not the may-read.
+	 *
+	 * pet_expr_access_get_may_read projects out the argument dimensions,
+	 * which costs nothing when the base has none -- a union declared as
+	 * an object -- and everything when it has one.  Through a pointer the
+	 * base is b[i0], so the relation came back as
+	 * "{ [] -> b_f[b[o0] -> f[]] : o0 >= 0 }": the whole array, from an
+	 * empty domain, with the argument gone.  Installed as the must-write
+	 * of "b->f = ...", that write pinned down no element, was not live
+	 * out of the scop, and ppcg reported "Eliminated dead instances:
+	 * { S_2[] }" for a store into the caller's memory.
+	 *
+	 * pet_expr_access_set_access wants a dependent access -- mark_may_write
+	 * above feeds it one -- so this asks for the same thing.
+	 */
+	relation = pet_expr_access_get_dependent_access(base,
+						pet_expr_access_may_read);
 	pet_expr_free(base);
+	if (getenv("PET_DEBUG_UNION")) {
+		fprintf(stderr, "pet union member: the relation it installs\n");
+		isl_union_map_dump(relation);
+	}
 	if (!relation)
 		return access;
 
@@ -3816,11 +3936,17 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 	 * before the "types" block below and independently of it: a scop's
 	 * local variables are extracted with no PetTypes at all, and those
 	 * are exactly the ones an inlined bit pun brings in.
+	 *
+	 * A record that is unnamed but typedef'd HAS a name -- the typedef's
+	 * -- and keeps it.  Writing the definition out for those made every
+	 * ggml_bf16_t in a scop a distinct anonymous struct type, so the
+	 * assignment that read one from an array no longer compiled.
 	 */
 	if (base->isRecordType()) {
 		RecordDecl *rd = pet_clang_record_decl(base);
 
-		if (rd && !rd->getDeclName() && rd->isCompleteDefinition())
+		if (rd && !rd->getDeclName() && !rd->getTypedefNameForAnonDecl() &&
+		    rd->isCompleteDefinition())
 			name = anonymous_record_definition(rd, ast_context);
 	}
 

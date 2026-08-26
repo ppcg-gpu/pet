@@ -516,6 +516,7 @@ private:
 	__isl_give pet_expr *extract_expr(clang::CStyleCastExpr *expr);
 
 	__isl_give pet_expr *extract_access_expr(clang::Expr *expr);
+	__isl_give pet_expr *union_member_storage(clang::MemberExpr *member);
 	__isl_give pet_expr *access_from_union_member(clang::Expr *expr,
 		__isl_take pet_expr *index);
 	__isl_give pet_expr *extract_access_expr(clang::ValueDecl *decl);
@@ -543,6 +544,7 @@ private:
 	void report(clang::Decl *decl, unsigned id);
 	void unsupported(clang::Stmt *stmt);
 	void report_unsupported_unary_operator(clang::Stmt *stmt);
+	void report_unsupported_union_member_size(clang::Stmt *stmt);
 	void report_unsupported_binary_operator(clang::Stmt *stmt);
 	void report_unsupported_statement_type(clang::Stmt *stmt);
 	void report_prototype_required(clang::Stmt *stmt);
