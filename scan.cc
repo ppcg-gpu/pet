@@ -1152,25 +1152,84 @@ __isl_give pet_expr *PetScan::extract_expr(FloatingLiteral *expr)
  * bits that were never written -- measured, and kept as
  * tests/pet-union/decl_only for the record.
  */
-/* Put the subscripts of "expr" back on "index", outermost last.
+/* The size in BYTES of what one subscript of "qt" steps over.
+ *
+ * For a scalar member that is the member; for an array member it is the
+ * array's element, because that is what an index counts.  Not
+ * pet_clang_get_type_size: that returns 0 for anything which is not an
+ * integer and a SIGNED BIT WIDTH for anything which is, so it called float
+ * and int32_t different sizes and refused every union in the tree.  Caught
+ * because the refusal fired on the reproducers that were supposed to go
+ * green.
+ */
+static uint64_t element_size(QualType qt, ASTContext &ast_context)
+{
+	QualType elem = ast_context.getBaseElementType(qt);
+
+	return ast_context.getTypeSizeInChars(elem).getQuantity();
+}
+
+/* The member of "record" whose element is smallest, or NULL if there is none.
+ *
+ * Smallest rather than first: see union_member_storage below for why that
+ * turns two constructions into one.
+ */
+static FieldDecl *union_canonical_field(RecordDecl *record,
+	ASTContext &ast_context)
+{
+	FieldDecl *canon = NULL;
+	uint64_t best = 0;
+
+	for (auto *f : record->fields()) {
+		uint64_t size = element_size(f->getType(), ast_context);
+		if (!size)
+			return NULL;
+		if (!canon || size < best) {
+			canon = f;
+			best = size;
+		}
+	}
+
+	return canon;
+}
+
+/* Put the subscripts of "expr" back on "index", outermost last, with the
+ * innermost one scaled.
  *
  * "expr" is a chain of ArraySubscriptExpr ending in the union member, and
  * "index" is that member replaced by the canonical one.  The subscripts are
  * what carries a window's OFFSET -- "g->i[1024]" is the buffer 4096 bytes
  * into the storage -- so dropping them would collapse every window in the
  * group onto the first, which is a wrong answer rather than a lost one.
+ *
+ * When the member's element is "scale" canonical elements wide, the last
+ * subscript "e" becomes "scale * e + shift"; the caller asks for every shift
+ * in 0 .. scale-1 and unions the relations, which is how one access lands on
+ * the whole range of canonical elements it really touches.  With scale 1 the
+ * expression is left exactly as it was rather than multiplied by one, so the
+ * common case produces the same index it always did.
  */
 __isl_give pet_expr *PetScan::carry_subscripts(Expr *expr,
-	__isl_take pet_expr *index)
+	__isl_take pet_expr *index, int scale, int shift)
 {
 	ArraySubscriptExpr *sub = dyn_cast<ArraySubscriptExpr>(expr);
+	pet_expr *idx;
 
 	if (!sub)
 		return index;
 
-	index = carry_subscripts(sub->getBase()->IgnoreParenImpCasts(), index);
+	index = carry_subscripts(sub->getBase()->IgnoreParenImpCasts(), index,
+				 1, 0);
+	idx = extract_expr(sub->getIdx());
+	if (scale != 1) {
+		idx = pet_expr_new_binary(0, pet_op_mul, idx,
+			pet_expr_new_int(isl_val_int_from_si(ctx, scale)));
+		if (shift)
+			idx = pet_expr_new_binary(0, pet_op_add, idx,
+			    pet_expr_new_int(isl_val_int_from_si(ctx, shift)));
+	}
 
-	return pet_expr_access_subscript(index, extract_expr(sub->getIdx()));
+	return pet_expr_access_subscript(index, idx);
 }
 
 /* The union member access at the root of "expr", looking through subscripts,
@@ -1221,26 +1280,9 @@ static FieldDecl *union_field(Expr *expr)
 	return cast<FieldDecl>(member->getMemberDecl());
 }
 
-/* The size in BYTES of what one subscript of "qt" steps over.
- *
- * For a scalar member that is the member; for an array member it is the
- * array's element, because that is what an index counts.  Not
- * pet_clang_get_type_size: that returns 0 for anything which is not an
- * integer and a SIGNED BIT WIDTH for anything which is, so it called float
- * and int32_t different sizes and refused every union in the tree.  Caught
- * because the refusal fired on the reproducers that were supposed to go
- * green.
- */
-static uint64_t element_size(QualType qt, ASTContext &ast_context)
-{
-	QualType elem = ast_context.getBaseElementType(qt);
-
-	return ast_context.getTypeSizeInChars(elem).getQuantity();
-}
-
 /* The storage a union member shares with its siblings, as an access.
  *
- * ONE MEMBER IS CHOSEN TO STAND FOR THE STORAGE, and it is the first.
+ * ONE MEMBER IS CHOSEN TO STAND FOR THE STORAGE.
  *
  * The obvious base is the union object itself, and that is what this did.
  * It works when the union is an object -- pet has an array for it -- and
@@ -1260,44 +1302,103 @@ static uint64_t element_size(QualType qt, ASTContext &ast_context)
  * offset lives in the index, which is what lets one union describe buffers
  * that begin at different addresses and overlap each other.
  *
- * MEMBERS WHOSE ELEMENTS DIFFER IN SIZE ARE REFUSED rather than mismodelled.
- * Standing one member in for another is exact only while a subscript steps
- * over the same bytes in both, and float beside int64_t does not: element 1
- * of one is inside element 0 of the other.  Carrying that means a relation
- * onto a RANGE of canonical elements rather than one, which is a different
- * piece of work, and until it exists this says so instead of quietly
- * computing with the wrong footprint.
+ * THE CANONICAL MEMBER IS THE ONE WITH THE SMALLEST ELEMENT, and that choice
+ * is what makes the arithmetic one case instead of two.  With the FIRST
+ * member standing for the storage, an access through a larger element covers
+ * a RANGE of canonical elements while an access through a smaller one lies
+ * INSIDE a canonical element at a floored index -- two constructions, one of
+ * them quasi-affine, and a union of f16, f32 and i64 needs both at once.
+ * Taking the smallest leaves only the range: every other element is a whole
+ * number of canonical ones, "scale" of them, and the relation is the union
+ * of "scale" ordinary accesses at s*i, s*i+1, ... s*i+scale-1.  Measured
+ * both ways round in llama-dspark's tests/ppcg/arena-probe.py, which puts
+ * the smaller member first in one form and last in the other; with this
+ * choice the two forms are the same case and both come out right.
+ *
+ * A RANGE AND NOT ONE ELEMENT, because the footprint of a write must not be
+ * understated.  An f32 store at index i touches canonical elements 2i and
+ * 2i+1; naming only 2i leaves 2i+1 unclaimed, and an unclaimed byte is a
+ * licence for exactly the reordering this exists to forbid.
+ *
+ * WHAT IS STILL REFUSED, with a message rather than a wrong answer: element
+ * sizes that are not multiples of the smallest, a scaled access through a
+ * member that is not an array (there is no subscript to scale), and a scaled
+ * access through an array of more than one dimension (the inner strides
+ * would have to be scaled too, and that is not this).
  */
-__isl_give pet_expr *PetScan::union_member_storage(Expr *expr)
+__isl_give pet_expr *PetScan::union_member_storage(Expr *expr, int scale,
+	int shift)
 {
 	MemberExpr *member = union_member_root(expr);
-	RecordDecl *record =
-	    cast<FieldDecl>(member->getMemberDecl())->getParent();
-	FieldDecl *first = NULL;
+	FieldDecl *field = cast<FieldDecl>(member->getMemberDecl());
+	FieldDecl *canon = union_canonical_field(field->getParent(),
+						 ast_context);
 	pet_expr *index;
-	uint64_t size = 0;
 
-	for (auto *f : record->fields()) {
-		uint64_t fsize = element_size(f->getType(), ast_context);
-		if (!first) {
-			first = f;
-			size = fsize;
-		} else if (fsize != size) {
-			report_unsupported_union_member_size(member);
-			return NULL;
-		}
-	}
-	if (!first)
+	if (!canon)
 		return NULL;
 
 	index = extract_index_expr(member->getBase());
 	if (member->isArrow())
 		index = pet_expr_access_subscript(index,
 					pet_expr_new_int(isl_val_zero(ctx)));
-	index = pet_expr_access_member(index, pet_id_from_decl(ctx, first));
-	index = carry_subscripts(expr, index);
+	index = pet_expr_access_member(index, pet_id_from_decl(ctx, canon));
+	index = carry_subscripts(expr, index, scale, shift);
 
-	return pet_expr_access_from_index(first->getType(), index, ast_context);
+	return pet_expr_access_from_index(canon->getType(), index, ast_context);
+}
+
+/* How many canonical elements does one element of the member accessed by
+ * "expr" cover?  0 if this union cannot be described, and the reason has
+ * been reported.
+ *
+ * This is where every boundary of the union path is drawn, in one place, so
+ * that a shape which cannot be modelled costs a diagnostic and a non-zero
+ * exit rather than a plausible wrong answer.
+ */
+int PetScan::union_scale(Expr *expr)
+{
+	MemberExpr *member = union_member_root(expr);
+	FieldDecl *field = cast<FieldDecl>(member->getMemberDecl());
+	FieldDecl *canon = union_canonical_field(field->getParent(),
+						 ast_context);
+	uint64_t mine, unit;
+
+	if (!canon)
+		return 0;
+	unit = element_size(canon->getType(), ast_context);
+	mine = element_size(field->getType(), ast_context);
+	if (!unit || !mine)
+		return 0;
+	if (mine == unit)
+		return 1;
+
+	/* An element that is not a whole number of canonical ones has no
+	 * exact range at all: it would start inside one and end inside
+	 * another.  Every type in reach here is a power of two wide, so this
+	 * is a guard rather than a case.
+	 */
+	if (mine % unit) {
+		report_unsupported_union_member_size(member);
+		return 0;
+	}
+	/* A scaled access needs a subscript to scale.  A scalar member has
+	 * none, so a union mixing a float with an int64_t cannot be carried
+	 * this way even though the arithmetic would be fine.
+	 */
+	if (!dyn_cast<ArraySubscriptExpr>(expr)) {
+		report_unsupported_union_member_size(member);
+		return 0;
+	}
+	/* More than one dimension would need the inner strides scaled too. */
+	if (dyn_cast<ArraySubscriptExpr>(
+		cast<ArraySubscriptExpr>(expr)->getBase()
+		    ->IgnoreParenImpCasts())) {
+		report_unsupported_union_member_size(member);
+		return 0;
+	}
+
+	return mine / unit;
 }
 
 /* Construct an access pet_expr from "expr", an access to a member of a union.
@@ -1324,27 +1425,62 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 	enum pet_expr_access_type type[] = { pet_expr_access_may_read,
 					     pet_expr_access_may_write,
 					     pet_expr_access_must_write };
-	int i;
+	int i, scale, shift;
 
 	access = pet_expr_access_from_index(expr->getType(), index,
 					    ast_context);
-	base = union_member_storage(expr);
-	/* PET_DEBUG_UNION: THE TWO EXPRESSIONS AND THE RELATION BETWEEN THEM.
-	 *
-	 * This function is where a union's members are made to share storage,
-	 * and when it is wrong the symptom is a statement that is simply not
-	 * in the scop.  Nothing about that says which member, which base, or
-	 * what relation was installed, and the search for it was a gdb session
-	 * over generated C.  Under this variable the access, the storage it is
-	 * pointed at, and the relation that joins them are all printed, and
-	 * the difference that mattered -- an argument dimension present or
-	 * projected away -- is visible in one run.
-	 */
-	if (getenv("PET_DEBUG_UNION")) {
-		fprintf(stderr, "pet union member: the access\n");
-		pet_expr_dump(access);
-		fprintf(stderr, "pet union member: the storage it is given\n");
-		pet_expr_dump(base);
+	scale = union_scale(expr);
+	relation = NULL;
+	for (shift = 0; scale > 0 && shift < scale; ++shift) {
+		isl_union_map *part;
+
+		base = union_member_storage(expr, scale, shift);
+		/* PET_DEBUG_UNION: THE EXPRESSIONS AND THE RELATION BETWEEN
+		 * THEM.
+		 *
+		 * This function is where a union's members are made to share
+		 * storage, and when it is wrong the symptom is a statement
+		 * that is simply not in the scop.  Nothing about that says
+		 * which member, which base, or what relation was installed,
+		 * and the search for it was a gdb session over generated C.
+		 * Under this variable the access, the storage it is pointed
+		 * at, and the relation that joins them are all printed, and
+		 * the difference that mattered -- an argument dimension
+		 * present or projected away -- is visible in one run.
+		 */
+		if (getenv("PET_DEBUG_UNION")) {
+			fprintf(stderr, "pet union member: the access\n");
+			pet_expr_dump(access);
+			fprintf(stderr, "pet union member: storage %d of %d\n",
+				shift, scale);
+			pet_expr_dump(base);
+		}
+		if (!base)
+			break;
+		/* THE DEPENDENT ACCESS, not the may-read.
+		 *
+		 * pet_expr_access_get_may_read projects out the argument
+		 * dimensions, which costs nothing when the base has none --
+		 * a union declared as an object -- and everything when it
+		 * has one.  Through a pointer the base is b[i0], so the
+		 * relation came back as
+		 * "{ [] -> b_f[b[o0] -> f[]] : o0 >= 0 }": the whole array,
+		 * from an empty domain, with the argument gone.  Installed
+		 * as the must-write of "b->f = ...", that write pinned down
+		 * no element, was not live out of the scop, and ppcg
+		 * reported "Eliminated dead instances: { S_2[] }" for a
+		 * store into the caller's memory.
+		 *
+		 * pet_expr_access_set_access wants a dependent access --
+		 * mark_may_write above feeds it one -- so this asks for the
+		 * same thing.
+		 */
+		part = pet_expr_access_get_dependent_access(base,
+						pet_expr_access_may_read);
+		pet_expr_free(base);
+		if (!part)
+			break;
+		relation = relation ? isl_union_map_union(relation, part) : part;
 	}
 	/* A UNION THIS CANNOT DESCRIBE MUST NOT BE DESCRIBED WRONGLY.
 	 *
@@ -1357,39 +1493,19 @@ __isl_give pet_expr *PetScan::access_from_union_member(Expr *expr,
 	 * had been written over it.  A loud warning beside a wrong answer is
 	 * the silent third outcome wearing a diagnostic.
 	 */
-	if (!access || !base) {
+	if (!access || scale <= 0 || shift != scale || !relation) {
 		pet_expr_free(access);
-		pet_expr_free(base);
+		isl_union_map_free(relation);
 		return NULL;
 	}
 
 	was_read = pet_expr_access_is_read(access);
 	was_write = pet_expr_access_is_write(access);
 
-	/* THE DEPENDENT ACCESS, not the may-read.
-	 *
-	 * pet_expr_access_get_may_read projects out the argument dimensions,
-	 * which costs nothing when the base has none -- a union declared as
-	 * an object -- and everything when it has one.  Through a pointer the
-	 * base is b[i0], so the relation came back as
-	 * "{ [] -> b_f[b[o0] -> f[]] : o0 >= 0 }": the whole array, from an
-	 * empty domain, with the argument gone.  Installed as the must-write
-	 * of "b->f = ...", that write pinned down no element, was not live
-	 * out of the scop, and ppcg reported "Eliminated dead instances:
-	 * { S_2[] }" for a store into the caller's memory.
-	 *
-	 * pet_expr_access_set_access wants a dependent access -- mark_may_write
-	 * above feeds it one -- so this asks for the same thing.
-	 */
-	relation = pet_expr_access_get_dependent_access(base,
-						pet_expr_access_may_read);
-	pet_expr_free(base);
 	if (getenv("PET_DEBUG_UNION")) {
 		fprintf(stderr, "pet union member: the relation it installs\n");
 		isl_union_map_dump(relation);
 	}
-	if (!relation)
-		return access;
 
 	for (i = 0; i < 3; ++i)
 		access = pet_expr_access_set_access(access, type[i],

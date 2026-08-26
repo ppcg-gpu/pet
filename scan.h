@@ -516,9 +516,11 @@ private:
 	__isl_give pet_expr *extract_expr(clang::CStyleCastExpr *expr);
 
 	__isl_give pet_expr *extract_access_expr(clang::Expr *expr);
+	int union_scale(clang::Expr *expr);
 	__isl_give pet_expr *carry_subscripts(clang::Expr *expr,
-		__isl_take pet_expr *index);
-	__isl_give pet_expr *union_member_storage(clang::Expr *expr);
+		__isl_take pet_expr *index, int scale, int shift);
+	__isl_give pet_expr *union_member_storage(clang::Expr *expr,
+		int scale, int shift);
 	__isl_give pet_expr *access_from_union_member(clang::Expr *expr,
 		__isl_take pet_expr *index);
 	__isl_give pet_expr *extract_access_expr(clang::ValueDecl *decl);
