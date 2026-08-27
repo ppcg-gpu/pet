@@ -66,6 +66,7 @@
 #include "killed_locals.h"
 #include "nest.h"
 #include "options.h"
+#include "debug_hooks.h"
 #include "scan.h"
 #include "scop.h"
 #include "scop_plus.h"
@@ -1899,6 +1900,15 @@ __isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
 		    isl_union_map_from_map(part);
 	}
 	isl_id_free(mid);
+	if (getenv("PET_DEBUG_EXTENT") &&
+	    pet_debug_only(rep->getNameAsString().c_str())) {
+		char *s = arena ? isl_union_map_to_str(arena) : NULL;
+
+		fprintf(stderr, "arena %s <- offset %ld scale %d shift %d : %s\n",
+			rep->getNameAsString().c_str(), offset, scale, shift,
+			s ? s : "NO MAP");
+		free(s);
+	}
 	if (!access || scale <= 0 || shift != scale || !arena) {
 		pet_expr_free(access);
 		isl_union_map_free(arena);
@@ -4917,6 +4927,64 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 	return scop;
 }
 
+/* Add every array an arena annotation names to "arrays", if it is not
+ * already there.
+ *
+ * AN ARRAY THE ANNOTATION NAMES IS AN ARRAY, WHETHER OR NOT ANYONE
+ * SUBSCRIPTS IT.  pet_scop_collect_arrays builds the list from ACCESSES,
+ * and composition replaces a member's access RELATION while leaving its
+ * INDEX naming the member.  So a representative the source never writes
+ * as "rep[...]" gets no array -- and then scop_collect_accesses, which
+ * intersects every access's range with the extents, removes every access
+ * the members composed onto it.  The annotation becomes a silent no-op:
+ * the aliasing it was written to declare is invisible again, which is the
+ * fault it exists to prevent.
+ *
+ * Measured on the 402-node scop.  hca_k_all_3_350 is touched only through
+ * a second pointer -- "(ggml_fp16_t (*)[128]) hca_k_all_3_350" -- and
+ * leaf_93_92 only in its own parameter declaration.  Neither had an
+ * array; 16 and 40 composed writes were dropped; and both left the
+ * dead-code report by disappearing rather than by coming alive, which
+ * reads like a repair and is the opposite of one.
+ *
+ * The extent of such an array is the annotation's, which extract_array
+ * already builds: see arena_floor.
+ *
+ * An array that had to be added here is REPORTED.  Adding it repairs the
+ * analysis, but the source still never spells that name, and an annotation
+ * naming storage the code reaches only under another spelling is a fact
+ * the emitter wants back: at 402 nodes hca_k_all_3_350 is read through
+ * "(ggml_fp16_t (*)[128]) hca_k_all_3_350" and the two spellings are two
+ * arrays, so the second one belongs in the pragma as a member at offset
+ * zero.  Silence here would leave that a matter of luck.
+ */
+static void arena_add_arrays(isl_ctx *ctx, array_desc_set &arrays)
+{
+	std::map<ValueDecl *, pet_arena_entry>::iterator it;
+	std::set<std::string> added;
+
+	for (it = pet_arena_map.begin(); it != pet_arena_map.end(); ++it) {
+		ValueDecl *rep = it->second.rep;
+		isl_id_list *list;
+
+		if (!rep)
+			continue;
+		list = isl_id_list_from_id(pet_id_from_decl(ctx, rep));
+		if (arrays.find(list) == arrays.end())
+			added.insert(rep->getNameAsString());
+		arrays.insert(list);
+	}
+
+	if (added.empty())
+		return;
+
+	fprintf(stderr, "pet: arena names never spelled in the source:");
+	for (std::set<std::string>::iterator a = added.begin();
+	     a != added.end(); ++a)
+		fprintf(stderr, " %s", a->c_str());
+	fprintf(stderr, "\n");
+}
+
 /* Construct a list of pet_arrays, one for each array (or scalar)
  * accessed inside "scop", add this list to "scop" and return the result.
  * The upper bounds of the arrays are converted to affine expressions
@@ -4959,6 +5027,7 @@ struct pet_scop *PetScan::scan_arrays(struct pet_scop *scop,
 		return NULL;
 
 	pet_scop_collect_arrays(scop, arrays);
+	arena_add_arrays(ctx, arrays);
 	if (arrays.size() == 0)
 		return scop;
 

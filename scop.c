@@ -52,6 +52,7 @@
 #include "filter.h"
 #include "loc.h"
 #include "nest.h"
+#include "debug_hooks.h"
 #include "scop.h"
 #include "tree.h"
 #include "print.h"
@@ -2834,6 +2835,38 @@ __isl_give isl_union_map *pet_scop_compute_outer_to_any(struct pet_scop *scop)
 	return compute_to_inner(scop, 1, 0);
 }
 
+/* Should a debug dump about the array called "name" be printed?
+ * See PET_DEBUG_ONLY in debug_hooks.h.
+ *
+ * A comma-separated list, so one run answers about several arrays: the
+ * question at 402 nodes is about five names and the run costs minutes.
+ *
+ * Here rather than in debug_hooks.c because that file is only compiled
+ * when PET_ENABLE_DEBUG_HOOKS is on, and the arena dumps are not tied to
+ * the crash handlers.
+ */
+int pet_debug_only(const char *name)
+{
+	const char *only = getenv("PET_DEBUG_ONLY");
+	size_t n;
+
+	if (!only || !*only)
+		return 1;
+	if (!name)
+		return 0;
+	n = strlen(name);
+	while (*only) {
+		const char *end = strchr(only, ',');
+
+		if (!end)
+			end = only + strlen(only);
+		if ((size_t) (end - only) == n && !strncmp(only, name, n))
+			return 1;
+		only = *end ? end + 1 : end;
+	}
+	return 0;
+}
+
 /* Print the range tuple id of "map" with its address and its user pointer.
  *
  * The address and the user are the point: two ids can print the same name
@@ -2846,10 +2879,12 @@ static isl_stat dump_range_id(__isl_take isl_map *map, void *user)
 {
 	isl_id *id = isl_map_get_tuple_id(map, isl_dim_out);
 
-	fprintf(stderr, "  range id %s -> %p user %p in %s\n",
-		id ? isl_id_get_name(id) : "-", (void *) id,
-		id ? isl_id_get_user(id) : NULL,
-		isl_map_get_tuple_name(map, isl_dim_in));
+	if (pet_debug_only(id ? isl_id_get_name(id) : NULL))
+		fprintf(stderr, "  range %s id %p user %p from %s : %s\n",
+			id ? isl_id_get_name(id) : "-", (void *) id,
+			id ? isl_id_get_user(id) : NULL,
+			isl_map_get_tuple_name(map, isl_dim_in),
+			isl_map_to_str(map));
 	isl_id_free(id);
 	isl_map_free(map);
 	return isl_stat_ok;
@@ -2898,24 +2933,24 @@ static __isl_give isl_union_map *scop_collect_accesses(struct pet_scop *scop,
 		arrays = isl_union_set_add_set(arrays, extent);
 	}
 	if (getenv("PET_DEBUG_EXTENT")) {
-		fprintf(stderr, "collect type %d\n  before: ", type);
-		isl_union_map_dump(accesses);
-		fprintf(stderr, "  extents: ");
-		isl_union_set_dump(arrays);
+		fprintf(stderr, "collect type %d before\n", type);
 		for (i = 0; i < scop->n_array; ++i) {
 			isl_id *aid = isl_set_get_tuple_id(
 					scop->arrays[i]->extent);
-			fprintf(stderr, "  extent id %s -> %p user %p\n",
-				isl_id_get_name(aid), (void *) aid,
-				isl_id_get_user(aid));
+
+			if (pet_debug_only(isl_id_get_name(aid)))
+				fprintf(stderr, "  extent %s id %p user %p : %s\n",
+					isl_id_get_name(aid), (void *) aid,
+					isl_id_get_user(aid),
+					isl_set_to_str(scop->arrays[i]->extent));
 			isl_id_free(aid);
 		}
 		isl_union_map_foreach_map(accesses, &dump_range_id, NULL);
 	}
 	accesses = isl_union_map_intersect_range(accesses, arrays);
 	if (getenv("PET_DEBUG_EXTENT")) {
-		fprintf(stderr, "  after : ");
-		isl_union_map_dump(accesses);
+		fprintf(stderr, "collect type %d after\n", type);
+		isl_union_map_foreach_map(accesses, &dump_range_id, NULL);
 	}
 
 	to_inner = pet_scop_compute_any_to_inner(scop);
