@@ -4961,18 +4961,41 @@ static struct pet_scop *add_type(isl_ctx *ctx, struct pet_scop *scop,
 static void arena_add_arrays(isl_ctx *ctx, array_desc_set &arrays)
 {
 	std::map<ValueDecl *, pet_arena_entry>::iterator it;
-	std::set<std::string> added;
+	array_desc_set::iterator a;
+	std::set<std::string> known, added;
+
+	/* BY NAME, NOT BY ID.  The ids already in the set have been through
+	 * pet_expr_anonymize and carry no ValueDecl; an id built here from
+	 * the declaration carries one, and isl treats the two as different
+	 * objects although both print the same name.  Matching on the object
+	 * therefore found nothing, reported all twelve representatives of the
+	 * 402-node scop as unspelled -- including ones the source plainly
+	 * subscribes, "ffn_moe_gate_3_388[t*192 + o*1] = (float) acc" -- and
+	 * added a second array for each of them.  The question here is
+	 * whether an array of that NAME is known, which is what is asked.
+	 */
+	for (a = arrays.begin(); a != arrays.end(); ++a) {
+		isl_id *id;
+
+		if (isl_id_list_n_id(*a) != 1)
+			continue;
+		id = isl_id_list_get_id(*a, 0);
+		known.insert(isl_id_get_name(id));
+		isl_id_free(id);
+	}
 
 	for (it = pet_arena_map.begin(); it != pet_arena_map.end(); ++it) {
 		ValueDecl *rep = it->second.rep;
-		isl_id_list *list;
+		std::string name;
 
 		if (!rep)
 			continue;
-		list = isl_id_list_from_id(pet_id_from_decl(ctx, rep));
-		if (arrays.find(list) == arrays.end())
-			added.insert(rep->getNameAsString());
-		arrays.insert(list);
+		name = rep->getNameAsString();
+		if (known.count(name))
+			continue;
+		arrays.insert(isl_id_list_from_id(pet_id_from_decl(ctx, rep)));
+		known.insert(name);
+		added.insert(name);
 	}
 
 	if (added.empty())
