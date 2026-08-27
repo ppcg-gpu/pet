@@ -96,6 +96,16 @@ void pet_inliner::add_array_arg(ValueDecl *decl, __isl_take pet_expr *expr,
 {
 	isl_id *id;
 
+	if (getenv("PET_DEBUG_TRACE")) {
+		isl_id *aid = pet_expr_access_get_id(expr);
+
+		fprintf(stderr, "arg: %s <- %s n_arg=%d is_addr=%d arena=%s\n",
+			decl->getNameAsString().c_str(),
+			aid ? isl_id_get_name(aid) : "-",
+			expr->n_arg, is_addr,
+			expr->acc.arena ? "yes" : "no");
+		isl_id_free(aid);
+	}
 	for (unsigned j = 0; j < expr->n_arg; ++j) {
 		pet_expr *var;
 		QualType type = ast_context.IntTy;

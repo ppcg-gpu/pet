@@ -2566,7 +2566,48 @@ static __isl_give isl_union_map *expr_collect_access(__isl_keep pet_expr *expr,
 		 * { lo[i0] -> h[o0] }", "after { }".
 		 */
 		arena = arena_align_domain(access, arena);
-		access = isl_union_map_apply_range(access, arena);
+		if (getenv("PET_DEBUG_TRACE")) {
+			char *b = isl_union_map_to_str(access);
+			char *m = isl_union_map_to_str(arena);
+
+			fprintf(stderr, "apply: before=%s\n       map   =%s\n",
+				b, m);
+			free(b); free(m);
+		}
+		{
+			isl_union_map *was = isl_union_map_copy(access);
+
+			access = isl_union_map_apply_range(access,
+						isl_union_map_copy(arena));
+			/* A COMPOSITION THAT VANISHES SAYS SO.
+			 *
+			 * isl matches spaces, and a map of one arity against
+			 * a relation of another is not an error it reports:
+			 * apply_range returns the empty map and the access
+			 * is simply gone from every relation that matters.
+			 * That silence cost a day of bisection, so it is not
+			 * gated behind a debug variable -- it is a fault.
+			 */
+			if (access && !isl_union_map_is_empty(was) &&
+			    isl_union_map_is_empty(access)) {
+				char *b = isl_union_map_to_str(was);
+				char *m = isl_union_map_to_str(arena);
+
+				fprintf(stderr, "pet: arena composition came "
+					"out empty\n  access %s\n  map    %s\n",
+					b, m);
+				free(b); free(m);
+			}
+			isl_union_map_free(was);
+			isl_union_map_free(arena);
+			arena = NULL;
+		}
+		if (getenv("PET_DEBUG_TRACE")) {
+			char *a = isl_union_map_to_str(access);
+
+			fprintf(stderr, "       after =%s\n", a);
+			free(a);
+		}
 	}
 	access = isl_union_map_intersect_domain(access,
 						isl_union_set_copy(domain));
@@ -2619,6 +2660,15 @@ static int expr_collect_accesses(__isl_keep pet_expr *expr, void *user)
 	    expr->n_arg != 0)
 		return 0;
 
+	if (getenv("PET_DEBUG_TRACE") && data->type == pet_expr_access_may_read) {
+		isl_id *aid = pet_expr_access_get_id(expr);
+
+		fprintf(stderr, "collect: %s read=%d write=%d arena=%s\n",
+			aid ? isl_id_get_name(aid) : "-",
+			expr->acc.read, expr->acc.write,
+			expr->acc.arena ? "yes" : "no");
+		isl_id_free(aid);
+	}
 	if ((data->type == pet_expr_access_may_read && expr->acc.read) ||
 	    ((data->type == pet_expr_access_may_write ||
 	      data->type == pet_expr_access_must_write ||

@@ -1741,7 +1741,7 @@ static void arena_strides(Expr *expr, ASTContext &ast_context,
  * the member's relation is exact.
  */
 __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
-	long offset, int scale, int shift, __isl_keep isl_id *mid)
+	long offset, int scale, int shift, __isl_keep isl_id *mid, int extra)
 {
 	std::vector<ArraySubscriptExpr *> subs;
 	std::vector<uint64_t> strides;
@@ -1801,7 +1801,7 @@ __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
 			rep->getNameAsString().c_str(),
 			(unsigned long long) rows);
 
-	space = isl_space_alloc(ctx, 0, subs.size(), 1);
+	space = isl_space_alloc(ctx, 0, subs.size() + (extra ? 1 : 0), 1);
 	/* THE MEMBER'S ID COMES FROM THE ACCESS, NOT FROM THE DECLARATION.
 	 *
 	 * isl compares tuple identity by isl_id, not by the name it prints.
@@ -1823,6 +1823,9 @@ __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
 	for (i = 0; i < subs.size(); ++i)
 		aff = isl_aff_set_coefficient_si(aff, isl_dim_in, i,
 						 (int) (strides[i] / unit));
+	if (extra)
+		aff = isl_aff_set_coefficient_si(aff, isl_dim_in,
+						 subs.size(), scale);
 
 	/* THE RANGE HAS TO CARRY THE REPRESENTATIVE'S NAME.
 	 *
@@ -1836,7 +1839,7 @@ __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
 	map = isl_map_from_aff(aff);
 	map = isl_map_set_tuple_id(map, isl_dim_out,
 				   isl_space_get_tuple_id(space, isl_dim_out));
-	if (rows > 1) {
+	if (rows > 1 && !extra) {
 		isl_space *sp;
 		isl_local_space *lsp;
 		isl_constraint *lo, *hi;
@@ -1958,13 +1961,47 @@ __isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
 	scale = arena_scale(expr, rep, offset);
 	arena = NULL;
 	for (shift = 0; scale > 0 && shift < scale; ++shift) {
-		isl_map *part = arena_map(expr, rep, offset, scale, shift, mid);
+		isl_map *part = arena_map(expr, rep, offset, scale, shift,
+					  mid, 0);
 
 		if (!part)
 			break;
 		arena = arena ?
 		    isl_union_map_union(arena, isl_union_map_from_map(part)) :
 		    isl_union_map_from_map(part);
+	}
+	/* THE ARITY THE ACCESS WILL HAVE, not only the one it has now.
+	 *
+	 * A map is built from the subscripts standing in the source, and
+	 * inlining changes how many there are: the emitter hands a whole ROW
+	 * to a helper, so the access reads csa_k_all_2_238_2d[ic] with one
+	 * subscript, and after the body is substituted into it the relation
+	 * is over two -- hi2d[r, i] in the reproducer.  isl matches spaces,
+	 * and a one-dimensional map against a two-dimensional relation is
+	 * not a mismatch it reports: apply_range simply returns the empty
+	 * map.  Measured, and it cost the better part of a day:
+	 *
+	 *     before = { S_9[r, i_0] -> hi2d[r, i_0] }
+	 *     map    = { hi2d[i0] -> h[o0] : 8192 + 32i0 <= o0 <= 8223 + 32i0 }
+	 *     after  = {  }
+	 *
+	 * The access then exists in no composed relation, no flow edge ties
+	 * it to its producers, and the read moves ahead of them: at 254 nodes
+	 * of the real graph FLASH_ATTN_EXT took half-written bytes, VKQ16[0]
+	 * came back 0xFE00 and every logit was NaN.
+	 *
+	 * Both arities are carried, in one union map.  The second is exact --
+	 * the added dimension steps by one element of the row, which is
+	 * "scale" representative cells -- so where substitution happens the
+	 * precise relation applies, and where it does not the widened one
+	 * still does.  Nothing chooses between them: isl picks by space.
+	 */
+	if (scale > 0 && shift == scale && arena) {
+		isl_map *wide = arena_map(expr, rep, offset, scale, 0, mid, 1);
+
+		if (wide)
+			arena = isl_union_map_union(arena,
+						isl_union_map_from_map(wide));
 	}
 	isl_id_free(mid);
 	if (getenv("PET_DEBUG_EXTENT") &&
