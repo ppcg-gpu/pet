@@ -2050,9 +2050,22 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	 * One of those is a defect; a hundred of them is the shape of the
 	 * whole map.
 	 */
-	std::set<std::string> with_body;
+	/* BY THE ENTITY, NOT BY WHAT IT IS CALLED.  Overloads share a
+	 * qualified name: "operator new" is the allocating one, the nothrow
+	 * one, the aligned one and the placement one, and only the last has
+	 * a body -- <new> defines it inline.  Keyed by name, every other
+	 * overload was reported as standing apart from that body, twenty of
+	 * them on two lines of C++ over <sstream>, and the number said
+	 * nothing about whether the link had sewn anything together.
+	 *
+	 * The canonical declaration is the identity a redeclaration chain
+	 * agrees on, so a definition anywhere in the chain makes hasBody
+	 * true above and this set is what remains: a body under this exact
+	 * entity that the declaration in hand does not reach.
+	 */
+	std::set<const Decl *> with_body;
 	for (FunctionDecl *fd : entries)
-		with_body.insert(fd->getQualifiedNameAsString());
+		with_body.insert(fd->getCanonicalDecl());
 
 	size_t apart = 0;
 	std::set<std::string> apart_names;
@@ -2067,7 +2080,7 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 
 			if (!fd || fd->hasBody(def))
 				continue;
-			if (with_body.count(fd->getQualifiedNameAsString())) {
+			if (with_body.count(fd->getCanonicalDecl())) {
 				++apart;
 				apart_names.insert(
 					fd->getQualifiedNameAsString());
