@@ -524,8 +524,9 @@ private:
 	__isl_give pet_expr *access_from_union_member(clang::Expr *expr,
 		__isl_take pet_expr *index);
 	int arena_scale(clang::Expr *expr, clang::ValueDecl *rep, long offset);
-	__isl_give pet_expr *arena_storage(clang::Expr *expr,
-		clang::ValueDecl *rep, long offset, int scale, int shift);
+	__isl_give isl_map *arena_map(clang::Expr *expr,
+		clang::ValueDecl *rep, long offset, int scale, int shift,
+		__isl_keep isl_id *mid);
 	__isl_give pet_expr *access_from_arena(clang::Expr *expr,
 		__isl_take pet_expr *index, clang::ValueDecl *rep, long offset);
 	__isl_give pet_expr *extract_access_expr(clang::ValueDecl *decl);

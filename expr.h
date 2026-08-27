@@ -62,7 +62,28 @@ struct pet_expr_access {
 	unsigned read : 1;
 	unsigned write : 1;
 	unsigned kill : 1;
-	isl_union_map *access[pet_expr_access_plain_end];
+	isl_union_map *access[pet_expr_access_end];
+	/* THE ARENA COMPOSITION, DEFERRED TO COLLECTION TIME.
+	 *
+	 * A #pragma ppcg arena member's relation over the representative
+	 * used to be installed here at extraction time, from a subscript
+	 * whose affine content (offset/unit + shift + sum i_k *
+	 * stride_k/unit) had not been evaluated yet: the relation came
+	 * out as the identity h[i], losing both the offset and the scale
+	 * for any variable subscript.  Measured on a nine-line probe: a
+	 * write of a[i] landed on h[2i] in no relation; the WAR edge
+	 * against a read of h[2048] was never built and the read moved
+	 * across the write, the 402 fault in miniature.
+	 *
+	 * This field holds the composition as data instead: an affine map
+	 * from the member's index tuple to the representative's, one
+	 * entry per shift in 0..scale-1.  The member's own slots keep
+	 * their normal, correctly evaluated relations over the array the
+	 * source names; expr_collect_access composes the range through
+	 * these maps when it hands relations to ppcg.  NULL on every
+	 * access no annotation composed.
+	 */
+	isl_union_map *arena;
 };
 /* Representation of call expression.
  *
@@ -183,10 +204,6 @@ isl_stat pet_expr_access_foreach_data_space(__isl_keep pet_expr *expr,
 isl_bool pet_expr_access_has_any_access_relation(__isl_keep pet_expr *expr);
 __isl_give isl_union_map *pet_expr_access_get_dependent_access(
 	__isl_keep pet_expr *expr, enum pet_expr_access_type type);
-/* The write relation built directly from the index, ignoring the
- * read/write flags, which are only set during context evaluation. */
-__isl_give isl_union_map *pet_expr_access_plain_write_relation(
-	__isl_keep pet_expr *expr);
 __isl_give isl_map *pet_expr_access_get_may_access(__isl_keep pet_expr *expr);
 
 __isl_give pet_expr *pet_expr_map_top_down(__isl_take pet_expr *expr,
@@ -204,6 +221,8 @@ __isl_give pet_expr *pet_expr_map_op(__isl_take pet_expr *expr,
 
 __isl_give isl_union_map *pet_expr_access_get_access(__isl_keep pet_expr *expr,
 	enum pet_expr_access_type type);
+__isl_give pet_expr *pet_expr_access_set_arena(__isl_take pet_expr *expr,
+	__isl_take isl_union_map *arena);
 __isl_give pet_expr *pet_expr_access_set_access(__isl_take pet_expr *expr,
 	enum pet_expr_access_type type, __isl_take isl_union_map *access);
 __isl_give pet_expr *pet_expr_access_set_index(__isl_take pet_expr *expr,

@@ -1641,45 +1641,6 @@ static ValueDecl *arena_member(Expr *expr, long *offset)
 	return pet_arena_lookup(decl, offset);
 }
 
-/* Is "expr" an access to an array named in ANY arena annotation --
- * including the representative, which arena_member answers NULL for?
- */
-static int arena_group_member(Expr *expr)
-{
-	ValueDecl *decl = arena_array_root(expr);
-	long offset;
-
-	if (!decl)
-		return 0;
-
-	return pet_arena_lookup(decl, &offset) != NULL ||
-	       pet_arena_map.count(decl) != 0;
-}
-
-/* Stash the write relations of the ACCESS expression "access", built
- * directly from its index, as its plain ones, for the liveness
- * computations in ppcg.
- *
- * Direct slot assignment: set_access would re-mark the read/write flags,
- * which at extraction time have not been set at all -- the context
- * evaluation sets them later -- and the flag-gated dependent getters
- * would answer empty for exactly the writes this exists to keep.  The
- * same relation goes into both slots; may/must is a distinction the
- * flags make, and the plain view carries the footprint either way.
- */
-static void stash_plain_access(pet_expr *access)
-{
-	isl_union_map *plain;
-
-	plain = pet_expr_access_plain_write_relation(access);
-	if (!plain)
-		plain = isl_union_map_empty(
-				pet_expr_access_get_parameter_space(access));
-	access->acc.access[pet_expr_access_plain_may_write] =
-					isl_union_map_copy(plain);
-	access->acc.access[pet_expr_access_plain_must_write] = plain;
-}
-
 /* The byte stride of each subscript of "expr", outermost first.
  *
  * The stride of a subscript is the size of what it yields: for
@@ -1703,13 +1664,10 @@ static void arena_strides(Expr *expr, ASTContext &ast_context,
 	std::reverse(strides.begin(), strides.end());
 }
 
-/* Construct an access to the representative of the storage "expr" is part of,
- * covering the "shift"th of the "scale" representative elements that one
- * element of "expr" spans.
+/* Construct the map that sends one element of the storage "expr" names onto
+ * the "shift"th of the "scale" representative elements it spans.
  *
- * The index is built from the representative and a single affine subscript
- *
- *	offset/unit + shift + sum over k of i_k * stride_k/unit
+ *	A[i_0, ..., i_n] -> R[offset/unit + shift + sum_k i_k * stride_k/unit]
  *
  * which is affine in any number of dimensions, and that is the whole reason
  * this form survived where three others did not.  The C is untouched: the
@@ -1718,37 +1676,80 @@ static void arena_strides(Expr *expr, ASTContext &ast_context,
  * a flattened buffer both put the data-dependent index back under a
  * multiplication, which is the one thing ppcg cannot relate -- measured at
  * 402 nodes, where flattening took 316 parallel bands to 0.
+ *
+ * A MAP, NOT AN ACCESS, and that is the fix rather than a detail.  This built
+ * a pet_expr whose subscript was a sum of extract_expr(idx) terms and handed
+ * it to pet_expr_access_from_index HERE, at extraction, before the context
+ * evaluation had filled in what those subscripts mean.  The relation came out
+ * as the identity, losing the offset and the scale of every variable
+ * subscript, so a write of a[i] landed on h[i] rather than h[2i] and nothing
+ * conflicted with a read of h[2048]: the anti-dependence was never built and
+ * the read crossed the write.  Measured on the arep probe, which returned
+ * 16384 -- the low half of the 1026.0f another member had written over those
+ * bytes -- and at 402 nodes, where five representatives lost a write, all
+ * five of them arrays with no store of their own.
+ *
+ * Written as a map there is nothing left to evaluate: the strides and the
+ * offset are compile-time constants and the member's own indices are the
+ * map's input dimensions.  expr_collect_access applies it to the range once
+ * the member's relation is exact.
  */
-__isl_give pet_expr *PetScan::arena_storage(Expr *expr, ValueDecl *rep,
-	long offset, int scale, int shift)
+__isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
+	long offset, int scale, int shift, __isl_keep isl_id *mid)
 {
 	std::vector<ArraySubscriptExpr *> subs;
 	std::vector<uint64_t> strides;
 	uint64_t unit = pointee_element_size(rep->getType(), ast_context);
-	pet_expr *index, *sum;
+	ValueDecl *member = arena_array_root(expr);
+	isl_local_space *ls;
+	isl_space *space;
+	isl_aff *aff;
+	isl_map *map;
 	unsigned i;
 
-	if (!unit)
+	if (!unit || !member)
 		return NULL;
 
 	arena_strides(expr, ast_context, subs, strides);
 
-	sum = pet_expr_new_int(isl_val_int_from_si(ctx,
-						   offset / (long) unit + shift));
-	for (i = 0; i < subs.size(); ++i) {
-		pet_expr *term = extract_expr(subs[i]->getIdx());
-		uint64_t f = strides[i] / unit;
+	space = isl_space_alloc(ctx, 0, subs.size(), 1);
+	/* THE MEMBER'S ID COMES FROM THE ACCESS, NOT FROM THE DECLARATION.
+	 *
+	 * isl compares tuple identity by isl_id, not by the name it prints.
+	 * A fresh pet_id_from_decl prints "idx" exactly as the access's own
+	 * range does and is a different id, so apply_range matched nothing
+	 * and returned the empty map -- silently, which is how this cost a
+	 * cycle to find rather than a compile error.  Measured:
+	 * "before { S_1[] -> idx[o0] }", "map { idx[i0] -> h[o0] }",
+	 * "after { }".
+	 */
+	space = isl_space_set_tuple_id(space, isl_dim_in, isl_id_copy(mid));
+	space = isl_space_set_tuple_id(space, isl_dim_out,
+				       pet_id_from_decl(ctx, rep));
 
-		if (f != 1)
-			term = pet_expr_new_binary(0, pet_op_mul, term,
-			    pet_expr_new_int(isl_val_int_from_si(ctx, f)));
-		sum = pet_expr_new_binary(0, pet_op_add, sum, term);
-	}
+	ls = isl_local_space_from_space(isl_space_domain(isl_space_copy(space)));
+	aff = isl_aff_zero_on_domain(ls);
+	aff = isl_aff_set_constant_si(aff,
+				      (int) (offset / (long) unit + shift));
+	for (i = 0; i < subs.size(); ++i)
+		aff = isl_aff_set_coefficient_si(aff, isl_dim_in, i,
+						 (int) (strides[i] / unit));
 
-	index = extract_index_expr(rep);
-	index = pet_expr_access_subscript(index, sum);
+	/* THE RANGE HAS TO CARRY THE REPRESENTATIVE'S NAME.
+	 *
+	 * isl_map_from_aff takes its space from the aff, whose range is
+	 * anonymous: the map came out as "lo[i0] -> [o0] : o0 = -8192 + 2i0",
+	 * arithmetic right and destination nameless, so apply_range in
+	 * expr_collect_access matched nothing and the composition led
+	 * nowhere.  Measured on the aneg probe, which had been green and went
+	 * red on exactly this.
+	 */
+	map = isl_map_from_aff(aff);
+	map = isl_map_set_tuple_id(map, isl_dim_out,
+				   isl_space_get_tuple_id(space, isl_dim_out));
+	isl_space_free(space);
 
-	return pet_expr_access_from_index(rep->getType(), index, ast_context);
+	return map;
 }
 
 /* How many representative elements does one element of "expr" cover?
@@ -1831,74 +1832,47 @@ int PetScan::arena_scale(Expr *expr, ValueDecl *rep, long offset)
 __isl_give pet_expr *PetScan::access_from_arena(Expr *expr,
 	__isl_take pet_expr *index, ValueDecl *rep, long offset)
 {
-	pet_expr *access, *base;
-	isl_union_map *relation;
-	isl_bool was_read, was_write;
-	enum pet_expr_access_type type[] = { pet_expr_access_may_read,
-					     pet_expr_access_may_write,
-					     pet_expr_access_must_write };
-	int i, scale, shift;
+	pet_expr *access;
+	isl_union_map *arena;
+	isl_multi_pw_aff *mpa;
+	isl_id *mid;
+	int scale, shift;
 
 	access = pet_expr_access_from_index(expr->getType(), index,
 					    ast_context);
+	mpa = pet_expr_access_get_index(access);
+	mid = mpa ? isl_multi_pw_aff_get_tuple_id(mpa, isl_dim_out) : NULL;
+	isl_multi_pw_aff_free(mpa);
 	scale = arena_scale(expr, rep, offset);
-	relation = NULL;
+	arena = NULL;
 	for (shift = 0; scale > 0 && shift < scale; ++shift) {
-		isl_union_map *part;
+		isl_map *part = arena_map(expr, rep, offset, scale, shift, mid);
 
-		base = arena_storage(expr, rep, offset, scale, shift);
-		if (getenv("PET_DEBUG_ARENA")) {
-			fprintf(stderr, "pet arena: the access\n");
-			pet_expr_dump(access);
-			fprintf(stderr, "pet arena: storage %d of %d at "
-				"offset %ld\n", shift, scale, offset);
-			pet_expr_dump(base);
-		}
-		if (!base)
-			break;
-		/* THE DEPENDENT ACCESS, not the may-read: the latter projects
-		 * out the argument dimensions, and a relation with the
-		 * argument gone pins down no element, so the write stops being
-		 * live out.  Learned on the union path, where it produced
-		 * "Eliminated dead instances" for a store into the caller's
-		 * memory.
-		 */
-		part = pet_expr_access_get_dependent_access(base,
-						pet_expr_access_may_read);
-		pet_expr_free(base);
 		if (!part)
 			break;
-		relation = relation ? isl_union_map_union(relation, part) : part;
+		arena = arena ?
+		    isl_union_map_union(arena, isl_union_map_from_map(part)) :
+		    isl_union_map_from_map(part);
 	}
-	if (!access || scale <= 0 || shift != scale || !relation) {
+	isl_id_free(mid);
+	if (!access || scale <= 0 || shift != scale || !arena) {
 		pet_expr_free(access);
-		isl_union_map_free(relation);
+		isl_union_map_free(arena);
 		return NULL;
 	}
 
-	was_read = pet_expr_access_is_read(access);
-	was_write = pet_expr_access_is_write(access);
-
-	if (getenv("PET_DEBUG_ARENA")) {
-		fprintf(stderr, "pet arena: the relation it installs\n");
-		isl_union_map_dump(relation);
-	}
-
-	/* THE PLAIN RELATION, FOR LIVENESS ONLY: the relation over the
-	 * array the index names, stashed before the composed one replaces
-	 * the may/must_write slots.  Not gated on was_write: the flags are
-	 * set later, by the context evaluation, and this runs at extraction.
-	 * See stash_plain_access.
+	/* THE COMPOSITION TRAVELS AS DATA, not as an installed relation.
+	 *
+	 * The member's own slots are left exactly as they are: the context
+	 * evaluation fills them from the evaluated index, and they are right.
+	 * What used to happen here was to overwrite them with a relation
+	 * built at THIS moment, from subscripts nobody had evaluated yet --
+	 * so it collapsed to the identity and lost the offset and the scale.
+	 * expr_collect_access applies these maps to the range instead, when
+	 * the member's relation is exact, and skips them for the plain view
+	 * so that liveness keeps judging the array the source names.
 	 */
-	stash_plain_access(access);
-
-	for (i = 0; i < 3; ++i)
-		access = pet_expr_access_set_access(access, type[i],
-						isl_union_map_copy(relation));
-	isl_union_map_free(relation);
-
-	access = pet_expr_access_set_read(access, was_read);
-	access = pet_expr_access_set_write(access, was_write);
+	access = pet_expr_access_set_arena(access, arena);
 
 	return access;
 }
@@ -1920,24 +1894,6 @@ __isl_give pet_expr *PetScan::extract_access_expr(Expr *expr)
 	rep = arena_member(expr, &offset);
 	if (rep)
 		return access_from_arena(expr, index, rep, offset);
-
-	/* A REPRESENTATIVE IS IN ITS OWN ARENA.  pet_arena_lookup answers
-	 * NULL for it on purpose -- composing an array into itself at
-	 * offset 0 is the identity -- so it takes the ordinary path here.
-	 * But it is still part of an annotated group, and the liveness
-	 * view in ppcg collects each member's plain relation; a
-	 * representative without one drops out of that view and its writes
-	 * are judged over the composed relations, where another member's
-	 * later write covers them (the 402-node defect).  Stashing the
-	 * ordinary relation as its plain one keeps it in.
-	 */
-	if (arena_group_member(expr)) {
-		access = pet_expr_access_from_index(expr->getType(), index,
-						    ast_context);
-		if (access)
-			stash_plain_access(access);
-		return access;
-	}
 
 	return pet_expr_access_from_index(expr->getType(), index, ast_context);
 }

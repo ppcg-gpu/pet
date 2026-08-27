@@ -2447,40 +2447,125 @@ struct pet_scop *pet_scop_align_params(struct pet_scop *scop)
  * If "tag" is set, then the access relation is tagged with
  * the corresponding reference identifier.
  */
+/* Re-tag the domains of "arena" with the range tuple ids that "access"
+ * actually carries, so that apply_range can match them.
+ *
+ * Two ids that print the same name are still two ids, and isl compares the
+ * objects.  The arena maps were built at extraction; the relations they must
+ * compose with are built later, by the context evaluation, and carry ids of
+ * their own.
+ */
+static __isl_give isl_union_map *arena_align_domain(
+	__isl_keep isl_union_map *access, __isl_take isl_union_map *arena)
+{
+	isl_union_set *range;
+	isl_union_map *aligned;
+
+	if (!access || !arena)
+		return arena;
+
+	range = isl_union_map_range(isl_union_map_copy(access));
+	aligned = isl_union_map_intersect_domain(isl_union_map_copy(arena),
+						 isl_union_set_copy(range));
+	if (isl_union_map_is_empty(aligned) == isl_bool_false) {
+		isl_union_set_free(range);
+		isl_union_map_free(arena);
+		return aligned;
+	}
+	isl_union_map_free(aligned);
+
+	/* the ids differ; rebuild each map's domain id from the range */
+	{
+		isl_space *rs = isl_union_set_get_space(range);
+		isl_union_map *out = isl_union_map_empty(rs);
+		isl_map_list *ml = isl_union_map_get_map_list(arena);
+		isl_set_list *sl = isl_union_set_get_set_list(range);
+		int i, n = isl_map_list_n_map(ml);
+		int j, m = isl_set_list_n_set(sl);
+
+		for (i = 0; i < n; ++i) {
+			isl_map *mp = isl_map_list_get_map(ml, i);
+			const char *nm = isl_map_get_tuple_name(mp, isl_dim_in);
+
+			for (j = 0; j < m; ++j) {
+				isl_set *st = isl_set_list_get_set(sl, j);
+				const char *sn =
+				    isl_set_get_tuple_name(st);
+
+				if (nm && sn && !strcmp(nm, sn))
+					mp = isl_map_set_tuple_id(mp,
+					    isl_dim_in, isl_set_get_tuple_id(st));
+				isl_set_free(st);
+			}
+			out = isl_union_map_add_map(out, mp);
+		}
+		isl_map_list_free(ml);
+		isl_set_list_free(sl);
+		isl_union_set_free(range);
+		isl_union_map_free(arena);
+		return out;
+	}
+}
+
 static __isl_give isl_union_map *expr_collect_access(__isl_keep pet_expr *expr,
 	enum pet_expr_access_type type, int tag,
 	__isl_take isl_union_map *accesses, __isl_keep isl_union_set *domain)
 {
 	isl_union_map *access;
+	int plain;
 
-	if (type == pet_expr_access_plain_may_write ||
-	    type == pet_expr_access_plain_must_write) {
-		isl_space *space;
-		isl_map *map;
+	/* THE PLAIN VIEW IS THE SAME RELATION WITHOUT THE COMPOSITION.
+	 *
+	 * A plain type asks for the write relation over the array the source
+	 * names.  Since the composition is applied here rather than installed
+	 * at extraction, that is exactly the ordinary relation with the arena
+	 * step skipped -- narrowed by everything pet narrowed it with, the
+	 * summary of a called function included.  Built from the index
+	 * instead, it was the whole extent of the array: on tests/
+	 * not_accessed.c a summary that writes b[pos] became a must-write of
+	 * all of b, every instance covered every earlier one, live_out came
+	 * out empty and ppcg emitted host code calling an undefined "copy"
+	 * (four opencl targets failed to link).
+	 */
+	plain = type == pet_expr_access_plain_may_write ||
+		type == pet_expr_access_plain_must_write;
+	if (plain)
+		type = type == pet_expr_access_plain_may_write ?
+				pet_expr_access_may_write :
+				pet_expr_access_must_write;
 
-		access = pet_expr_access_plain_write_relation(expr);
-		if (!access)
-			return isl_union_map_union(accesses,
-					isl_union_map_empty(
-					    isl_union_set_get_space(domain)));
-		/* The index of an access with expression arguments carries
-		 * them wrapped into its domain; unwrap and project them off
-		 * the way get_access does, so the result intersects the
-		 * statement domains.  After the context evaluation a plain
-		 * subscript usually has a plain domain and nothing to wrap.
+	access = pet_expr_access_get_access(expr, type);
+	/* COMPOSE THE ARENA AT COLLECTION TIME.  A #pragma ppcg arena
+	 * member's slots hold its relation over the array the source
+	 * names -- exact, because the context evaluation filled them
+	 * from the evaluated index.  acc.arena maps that array's index
+	 * tuple onto the representative's; applying it to the range
+	 * here gives the composed relation over the representative
+	 * that the dependence analysis needs, built only from
+	 * evaluated data.  Installed at extraction instead, the
+	 * relation lost the offset and the scale of every variable
+	 * subscript and came out as the identity -- measured on the
+	 * arep probe, where a write of a[i] landed nowhere against a
+	 * read of h[2048] and the read crossed the write.  The plain
+	 * view skips this step: liveness judges the array the source
+	 * names.
+	 */
+	if (access && expr->acc.arena && !plain) {
+		isl_union_map *arena;
+
+		arena = isl_union_map_copy(expr->acc.arena);
+		/* ALIGN THE MAP'S DOMAIN TO THE RELATION'S RANGE.
+		 *
+		 * isl matches tuples by isl_id, and the two ids print
+		 * the same name while being different objects: the
+		 * map's was taken when the access was extracted, the
+		 * relation's when the context evaluation built it.
+		 * apply_range then returned the empty map in silence.
+		 * Measured: "before { S_2[i] -> lo[o0] }", "map
+		 * { lo[i0] -> h[o0] }", "after { }".
 		 */
-		space = isl_multi_pw_aff_get_space(expr->acc.index);
-		space = isl_space_domain(space);
-		if (isl_space_is_wrapping(space)) {
-			map = isl_map_universe(isl_space_unwrap(space));
-			map = isl_map_domain_map(map);
-			access = isl_union_map_apply_domain(access,
-						    isl_union_map_from_map(map));
-		} else {
-			isl_space_free(space);
-		}
-	} else {
-		access = pet_expr_access_get_access(expr, type);
+		arena = arena_align_domain(access, arena);
+		access = isl_union_map_apply_range(access, arena);
 	}
 	access = isl_union_map_intersect_domain(access,
 						isl_union_set_copy(domain));
@@ -2535,20 +2620,9 @@ static int expr_collect_accesses(__isl_keep pet_expr *expr, void *user)
 
 	if ((data->type == pet_expr_access_may_read && expr->acc.read) ||
 	    ((data->type == pet_expr_access_may_write ||
-	      data->type == pet_expr_access_must_write) && expr->acc.write) ||
-	    /* THE PLAIN VIEW IS BUILT LAZILY, from the index as it stands
-	     * after the context evaluation: at extraction time the index
-	     * carries an empty domain and a relation built there
-	     * intersects no statement domain.  The index still names the
-	     * array the source wrote -- composition replaced the relation,
-	     * never the printed subscripts -- so the relation built here is
-	     * over the right array.  Guarded on write so that reads never
-	     * grow one.
-	     */
-	    ((data->type == pet_expr_access_plain_may_write ||
-	      data->type == pet_expr_access_plain_must_write) &&
-	     expr->acc.write &&
-	     pet_expr_access_plain_write_relation(expr)))
+	      data->type == pet_expr_access_must_write ||
+	      data->type == pet_expr_access_plain_may_write ||
+	      data->type == pet_expr_access_plain_must_write) && expr->acc.write))
 		data->accesses = expr_collect_access(expr,
 						data->type, data->tag,
 						data->accesses, data->domain);
