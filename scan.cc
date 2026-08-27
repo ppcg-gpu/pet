@@ -1187,9 +1187,29 @@ __isl_give pet_expr *PetScan::extract_expr(FloatingLiteral *expr)
  * because the refusal fired on the reproducers that were supposed to go
  * green.
  */
+/* The size of one element of "qt", or zero if it has none.
+ *
+ * A DEPENDENT TYPE HAS NO SIZE TO GIVE.  The map goes over every body
+ * the link holds, and a member of a class template is held
+ * uninstantiated: inside std::basic_istream::operator>>, __streambuf_type
+ * is basic_streambuf<_CharT, _Traits> with the parameters still
+ * parameters.  Asked for its size, clang's getTypeSizeInChars does not
+ * refuse -- it recurses, 87331 frames of getTypeInfo and getTypeInfoImpl
+ * in a pair, and the process dies on the stack.  Measured:
+ * "__streambuf_type class=Typedef dependent=1 incomplete=0".
+ *
+ * size_in_bytes has honoured that contract all along, through
+ * has_known_size; this asked without looking.  The asymmetry is the
+ * defect, not the question: the query completes ordinary types as a side
+ * effect and the printed definitions depend on it, so what must not
+ * happen is asking it of something that cannot answer.
+ */
 static uint64_t element_size(QualType qt, ASTContext &ast_context)
 {
 	QualType elem = ast_context.getBaseElementType(qt);
+
+	if (elem->isDependentType())
+		return 0;
 
 	return ast_context.getTypeSizeInChars(elem).getQuantity();
 }
