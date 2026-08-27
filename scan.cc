@@ -50,6 +50,7 @@
 #include <isl/id.h>
 #include <isl/space.h>
 #include <isl/aff.h>
+#include <isl/constraint.h>
 #include <isl/set.h>
 #include <isl/union_set.h>
 
@@ -1750,12 +1751,55 @@ __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
 	isl_space *space;
 	isl_aff *aff;
 	isl_map *map;
+	uint64_t rows;
 	unsigned i;
 
 	if (!unit || !member)
 		return NULL;
 
 	arena_strides(expr, ast_context, subs, strides);
+
+	/* THE WHOLE ROW, NOT ITS FIRST CELL.
+	 *
+	 * The shift loop widens a member whose SCALAR is narrower than the
+	 * representative's -- an f32 store over f16 storage touches two
+	 * cells.  A member of a two-dimensional view is wider the other way:
+	 * the emitter hands a whole ROW to a helper,
+	 *
+	 *     ggml_vec_dot_f16(128, &s, 0, csa_k_all_2_238_2d[ic], 0, ...)
+	 *
+	 * so the access carries ONE subscript while the element it yields is
+	 * an array of 128.  Measured on the 402-node graph before this:
+	 *
+	 *     csa_k_all_2_238_2d[i0] -> csa_k_all_2_238[128 i0]
+	 *
+	 * -- the row's first cell.  An understated footprint is exactly the
+	 * licence for the reordering this composition exists to forbid: the
+	 * FLASH_ATTN_EXT read never reached the representative's may_read,
+	 * no flow edge tied it to its producers, and it took half-written
+	 * bytes.  VKQ16[0] came back 0xFE00 and every logit was NaN.
+	 *
+	 * The rule is exactly as wide as the case it was measured on: the
+	 * access, with its implicit casts stripped, is a subscript whose type
+	 * is a constant array.  Everything else keeps the old width of one.
+	 * A probe over three inputs: this shape prints N=16 for the row and
+	 * nothing at all for the scalar accesses beside it.
+	 */
+	rows = 1;
+	{
+		Expr *bare = expr->IgnoreParenImpCasts();
+		const ConstantArrayType *ca = NULL;
+
+		if (isa<ArraySubscriptExpr>(bare))
+			ca = ast_context.getAsConstantArrayType(
+							bare->getType());
+		if (ca)
+			rows = (uint64_t) ca->getSize().getZExtValue();
+	}
+	if (getenv("PET_DEBUG_WIDTH"))
+		fprintf(stderr, "width: %s rows=%llu\n",
+			rep->getNameAsString().c_str(),
+			(unsigned long long) rows);
 
 	space = isl_space_alloc(ctx, 0, subs.size(), 1);
 	/* THE MEMBER'S ID COMES FROM THE ACCESS, NOT FROM THE DECLARATION.
@@ -1792,6 +1836,29 @@ __isl_give isl_map *PetScan::arena_map(Expr *expr, ValueDecl *rep,
 	map = isl_map_from_aff(aff);
 	map = isl_map_set_tuple_id(map, isl_dim_out,
 				   isl_space_get_tuple_id(space, isl_dim_out));
+	if (rows > 1) {
+		isl_space *sp;
+		isl_local_space *lsp;
+		isl_constraint *lo, *hi;
+		isl_basic_map *wide;
+
+		sp = isl_space_map_from_set(isl_space_range(
+						isl_space_copy(space)));
+		lsp = isl_local_space_from_space(isl_space_copy(sp));
+		lo = isl_constraint_alloc_inequality(
+						isl_local_space_copy(lsp));
+		lo = isl_constraint_set_coefficient_si(lo, isl_dim_out, 0, 1);
+		lo = isl_constraint_set_coefficient_si(lo, isl_dim_in, 0, -1);
+		hi = isl_constraint_alloc_inequality(lsp);
+		hi = isl_constraint_set_coefficient_si(hi, isl_dim_in, 0, 1);
+		hi = isl_constraint_set_coefficient_si(hi, isl_dim_out, 0, -1);
+		hi = isl_constraint_set_constant_si(hi,
+				(int) ((rows - 1) * (uint64_t) scale));
+		wide = isl_basic_map_universe(sp);
+		wide = isl_basic_map_add_constraint(wide, lo);
+		wide = isl_basic_map_add_constraint(wide, hi);
+		map = isl_map_apply_range(map, isl_map_from_basic_map(wide));
+	}
 	isl_space_free(space);
 
 	return map;
