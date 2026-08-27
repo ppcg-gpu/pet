@@ -2048,8 +2048,26 @@ __isl_give pet_expr *PetScan::extract_argument(FunctionDecl *fd, int pos,
 	int is_addr = 0, is_partial = 0;
 
 	expr = pet_clang_strip_casts(expr);
-	arg = extract_addr_of_arg(expr);
+	/* "p + i" names the same place as "&p[i]", and the call taking it
+	 * is the one that has to be told so.  Without this the base is
+	 * built from "p" alone and comes out with no dimension at all,
+	 * which the patching of an inlined body then tries to extend by
+	 * minus one: the dimension count is unsigned and the subtraction
+	 * wraps.  isl catches it -- "space->n_out <= n_out" -- and the
+	 * inlining of that body quietly does not happen.
+	 *
+	 * The same subscript builder answers here as answers on the path
+	 * for an argument bound to an array parameter.  It has to be both
+	 * places because the two paths are taken by different calls: a
+	 * body that can be put in place goes one way, a call left standing
+	 * goes the other, and "ggml_vec_dot_f32(n, &qk, 0, q + h*qs, ...)"
+	 * inside an inlined indexer is the second inside the first.
+	 */
+	arg = subscript_from_pointer_offset(ast_context, expr);
 	if (arg) {
+		is_addr = 1;
+		expr = arg;
+	} else if ((arg = extract_addr_of_arg(expr))) {
 		is_addr = 1;
 		expr = arg;
 	}
