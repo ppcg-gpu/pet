@@ -148,6 +148,25 @@ static __isl_give isl_multi_pw_aff *align_domain(
 	return mpa;
 }
 
+/* Does "expr" read the parameter itself rather than something it points at?
+ *
+ * A body that subscripts a pointer parameter has an access with at least
+ * one dimension -- the subscript.  One that only passes the parameter on,
+ * or assigns it, accesses the pointer variable, which is
+ * zero-dimensional.
+ */
+static bool substituted_is_value(__isl_keep pet_expr *expr)
+{
+	isl_multi_pw_aff *index;
+	isl_size dim;
+
+	index = pet_expr_access_get_index(expr);
+	dim = isl_multi_pw_aff_dim(index, isl_dim_out);
+	isl_multi_pw_aff_free(index);
+
+	return dim == 0;
+}
+
 /* Perform the substitutions that are stored in "substituter"
  * to the access expression "expr".
  *
@@ -197,6 +216,35 @@ static __isl_give pet_expr *substitute_access(__isl_take pet_expr *expr,
 	isl_multi_pw_aff_free(index);
 	index = pet_expr_access_get_index(subs_expr);
 	index = align_domain(index, space, n, expr_n_arg);
+
+	/* A POINTER PARAMETER USED AS A VALUE IS NOT AN ACCESS TO PATCH.
+	 *
+	 * "is_addr" says the argument was "&x", so the body's access through
+	 * the parameter is an offset into x and the two are combined by
+	 * prefixing one with the other.  That assumes the body SUBSCRIPTS the
+	 * parameter: patch_space takes the outermost dimension of the body's
+	 * access to be the offset and appends the rest, so it needs one to
+	 * take.
+	 *
+	 * A body that only reads the parameter has no dimension to give up.
+	 * Its access is the pointer itself -- zero-dimensional -- and there
+	 * is no array access to prefix, because the value substituted is an
+	 * address rather than an element.  Measured on
+	 * tests/ast_link/default_arg, where libstdc++ hands "&__val" to a
+	 * body that passes "__ptr" on: "is_addr body_dims=0 body=__ptr",
+	 * nine times, against body_dims=1 everywhere else.
+	 *
+	 * What the substitution means there is simply the argument: the
+	 * body's "value of the parameter" IS "&x".  So the address expression
+	 * takes the access's place, whole, rather than being folded into it.
+	 */
+	if (is_addr && substituted_is_value(expr)) {
+		isl_multi_pw_aff_free(index);
+		pet_expr_free(expr);
+		expr = pet_expr_copy(subs);
+		pet_expr_free(subs_expr);
+		return expr;
+	}
 
 	expr = pet_expr_access_patch(expr, index, is_addr);
 
