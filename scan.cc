@@ -1608,6 +1608,50 @@ static ValueDecl *pet_arena_lookup(ValueDecl *decl, long *offset)
 	return it->second.rep;
 }
 
+/* The lowest element index of "rep" that the annotation composes onto it,
+ * 0 if nothing reaches below its own start.  "unit" is the size of one of
+ * its elements.
+ *
+ * THE EXTENT HAS TO COVER WHAT THE COMPOSITION LANDS ON.  pet gives every
+ * array the natural universe, and scop_collect_accesses intersects each
+ * access's range with it.  An annotation is allowed to put the
+ * representative anywhere in the storage -- "arena h 0 lo -16384 idx
+ * -12288" -- and then a member's composed access has a NEGATIVE index into
+ * the representative, which "i0 >= 0" removes.  Silently, and from every
+ * relation at once, so the access is not misplaced but absent: on the aneg
+ * probe both the read of idx[0] and the write of lo[i] vanished, dep_false
+ * came out empty, nothing forbade the fusion, and the read crossed the
+ * write.  Measured -- before: "[S_2[i] -> __pet_ref_4[]] -> h[o0] :
+ * o0 = -8192 + 2i or o0 = -8191 + 2i", extents: "h[i0] : i0 >= 0",
+ * after: the S_2 entry is gone.
+ *
+ * A member whose offset is not a whole number of representative elements
+ * takes the element below, so the bound never cuts into a composed access.
+ */
+static long arena_floor(ValueDecl *rep, uint64_t unit)
+{
+	std::map<ValueDecl *, pet_arena_entry>::iterator it;
+	long lo = 0;
+
+	if (!unit)
+		return 0;
+
+	for (it = pet_arena_map.begin(); it != pet_arena_map.end(); ++it) {
+		long off = it->second.offset;
+		long e;
+
+		if (it->second.rep != rep || it->first == rep)
+			continue;
+		e = off / (long) unit;
+		if (off % (long) unit)
+			e -= 1;
+		if (e < lo)
+			lo = e;
+	}
+
+	return lo;
+}
+
 /* The array reference at the root of "expr", looking through subscripts,
  * or NULL if there is none.
  *
@@ -4472,8 +4516,11 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 	QualType qt = pet_id_get_array_type(id);
 	int depth = pet_clang_array_depth(qt);
 	QualType base = pet_clang_base_type(qt);
+	ValueDecl *decl = pet_id_get_decl(id);
 	string name;
 	isl_space *space;
+	long lo;
+	int i;
 
 	array = isl_calloc_type(ctx, struct pet_array);
 	if (!array)
@@ -4482,7 +4529,14 @@ struct pet_array *PetScan::extract_array(__isl_keep isl_id *id,
 	space = isl_space_set_alloc(ctx, 0, depth);
 	space = isl_space_set_tuple_id(space, isl_dim_set, isl_id_copy(id));
 
-	array->extent = isl_set_nat_universe(space);
+	/* The outer bound is the annotation's, when one puts this array's
+	 * storage below its own start.  See arena_floor.
+	 */
+	lo = decl ? arena_floor(decl, pointee_element_size(qt, ast_context)) : 0;
+	array->extent = isl_set_universe(space);
+	for (i = 0; i < depth; ++i)
+		array->extent = isl_set_lower_bound_si(array->extent,
+						isl_dim_set, i, i ? 0 : lo);
 
 	space = isl_space_params_alloc(ctx, 0);
 	array->context = isl_set_universe(space);

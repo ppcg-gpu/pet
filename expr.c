@@ -2128,6 +2128,22 @@ static __isl_give pet_expr *access_anonymize(__isl_take pet_expr *expr,
 			break;
 	}
 	expr->acc.index = isl_multi_pw_aff_reset_user(expr->acc.index);
+	/* THE COMPOSITION IS ANONYMIZED WITH THE REST.
+	 *
+	 * acc.arena names the representative with an id built from its
+	 * declaration, and everything else loses its decl here.  Left out,
+	 * the composed access came out of the collection carrying an id that
+	 * prints "h" and holds the ValueDecl, while the array's extent and
+	 * every ordinary access carry an id that prints "h" and holds NULL.
+	 * isl matches by id, so intersect_range in scop_collect_accesses
+	 * found no extent for that space and dropped the access -- from
+	 * reads, from may_writes, from everything -- leaving dep_false empty
+	 * and the aneg probe's read free to cross the write.  Measured:
+	 * "extent id h -> 0x..450 user (nil)", "range id h -> 0x..b00 user
+	 * 0x..7f0".
+	 */
+	if (expr->acc.arena)
+		expr->acc.arena = isl_union_map_reset_user(expr->acc.arena);
 	if (type < pet_expr_access_end || !expr->acc.index)
 		return pet_expr_free(expr);
 

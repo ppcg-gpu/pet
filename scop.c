@@ -2834,6 +2834,27 @@ __isl_give isl_union_map *pet_scop_compute_outer_to_any(struct pet_scop *scop)
 	return compute_to_inner(scop, 1, 0);
 }
 
+/* Print the range tuple id of "map" with its address and its user pointer.
+ *
+ * The address and the user are the point: two ids can print the same name
+ * and be different objects, and isl matches by the object.  A composed
+ * access whose range id still held the ValueDecl was dropped silently by
+ * intersect_range against an extent whose id held NULL, and the printed
+ * relations gave no hint of it.  See PET_DEBUG_EXTENT below.
+ */
+static isl_stat dump_range_id(__isl_take isl_map *map, void *user)
+{
+	isl_id *id = isl_map_get_tuple_id(map, isl_dim_out);
+
+	fprintf(stderr, "  range id %s -> %p user %p in %s\n",
+		id ? isl_id_get_name(id) : "-", (void *) id,
+		id ? isl_id_get_user(id) : NULL,
+		isl_map_get_tuple_name(map, isl_dim_in));
+	isl_id_free(id);
+	isl_map_free(map);
+	return isl_stat_ok;
+}
+
 /* Collect and return all access relations of the given "type" in "scop".
  * If "type" is pet_expr_access_killed, then we only add the arguments of
  * kill operations.
@@ -2876,7 +2897,26 @@ static __isl_give isl_union_map *scop_collect_accesses(struct pet_scop *scop,
 		isl_set *extent = isl_set_copy(scop->arrays[i]->extent);
 		arrays = isl_union_set_add_set(arrays, extent);
 	}
+	if (getenv("PET_DEBUG_EXTENT")) {
+		fprintf(stderr, "collect type %d\n  before: ", type);
+		isl_union_map_dump(accesses);
+		fprintf(stderr, "  extents: ");
+		isl_union_set_dump(arrays);
+		for (i = 0; i < scop->n_array; ++i) {
+			isl_id *aid = isl_set_get_tuple_id(
+					scop->arrays[i]->extent);
+			fprintf(stderr, "  extent id %s -> %p user %p\n",
+				isl_id_get_name(aid), (void *) aid,
+				isl_id_get_user(aid));
+			isl_id_free(aid);
+		}
+		isl_union_map_foreach_map(accesses, &dump_range_id, NULL);
+	}
 	accesses = isl_union_map_intersect_range(accesses, arrays);
+	if (getenv("PET_DEBUG_EXTENT")) {
+		fprintf(stderr, "  after : ");
+		isl_union_map_dump(accesses);
+	}
 
 	to_inner = pet_scop_compute_any_to_inner(scop);
 	accesses = isl_union_map_apply_range(accesses, to_inner);
@@ -2908,11 +2948,9 @@ __isl_give isl_union_map *pet_scop_get_must_writes(struct pet_scop *scop)
 /* Return the potential write access relation OVER THE ARRAYS THE SOURCE
  * NAMES, for the liveness computations only.
  *
- * scop_collect_accesses routes plain_may_write through the same statement
- * and expression walk, but each access contributes only when it carries a
- * plain relation -- which is exactly the accesses an annotation composed
- * onto a representative.  An ordinary access contributes nothing here and
- * is covered by the caller falling back to the composed may_writes.
+ * The very same walk as pet_scop_get_may_writes, with expr_collect_access
+ * skipping the arena composition: nothing is stored twice, so nothing here
+ * can disagree with the composed view about anything but the composition.
  */
 __isl_give isl_union_map *pet_scop_get_plain_may_writes(struct pet_scop *scop)
 {
