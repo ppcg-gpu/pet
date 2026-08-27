@@ -1,0 +1,458 @@
+start: 407
+end: 513
+indent: "\t"
+context: '[n] -> {  : -2147483648 <= n <= 262144 }'
+schedule: '{ domain: "[n] -> { S_1[t] : 0 <= t < n; S_19[t, h] : 0 <= t < n and 0
+  <= h <= 3; S_4[t] : 0 <= t < n; S_8[t] : 0 <= t < n; S_9[t] : 0 <= t < n; S_6[t]
+  : 0 <= t < n; S_20[t, h] : 0 <= t < n and 0 <= h <= 3; S_2[t] : 0 <= t < n; S_12[t]
+  : 0 <= t < n; S_7[t] : 0 <= t < n; S_16[t] : 0 <= t < n; S_13[t] : 0 <= t < n; S_10[t]
+  : 0 <= t < n; S_3[t] : 0 <= t < n; S_0[t] : 0 <= t < n; S_22[t] : 0 <= t < n; S_21[t,
+  h] : 0 <= t < n and 0 <= h <= 3; S_17[t, h] : 0 <= t < n and 0 <= h <= 3; S_5[t]
+  : 0 <= t < n; S_14[t] : 0 <= t < n; S_15[t] : 0 <= t < n; S_11[t] : 0 <= t < n;
+  S_18[t, h] : 0 <= t < n and 0 <= h <= 3; S_23[t] : 0 <= t < n }", child: { schedule:
+  "[n] -> L_0[{ S_1[t] -> [(t)]; S_19[t, h] -> [(t)]; S_4[t] -> [(t)]; S_8[t] -> [(t)];
+  S_9[t] -> [(t)]; S_6[t] -> [(t)]; S_20[t, h] -> [(t)]; S_2[t] -> [(t)]; S_12[t]
+  -> [(t)]; S_7[t] -> [(t)]; S_16[t] -> [(t)]; S_13[t] -> [(t)]; S_10[t] -> [(t)];
+  S_3[t] -> [(t)]; S_0[t] -> [(t)]; S_22[t] -> [(t)]; S_21[t, h] -> [(t)]; S_17[t,
+  h] -> [(t)]; S_5[t] -> [(t)]; S_14[t] -> [(t)]; S_15[t] -> [(t)]; S_11[t] -> [(t)];
+  S_18[t, h] -> [(t)]; S_23[t] -> [(t)] }]", child: { sequence: [ { filter: "[n] ->
+  { S_0[t] }" }, { filter: "[n] -> { S_2[t] }" }, { filter: "[n] -> { S_3[t] }" },
+  { filter: "[n] -> { S_5[t] }" }, { filter: "[n] -> { S_6[t] }" }, { filter: "[n]
+  -> { S_8[t] }" }, { filter: "[n] -> { S_9[t] }" }, { filter: "[n] -> { S_11[t] }"
+  }, { filter: "[n] -> { S_12[t] }" }, { filter: "[n] -> { S_14[t] }" }, { filter:
+  "[n] -> { S_15[t] }" }, { filter: "[n] -> { S_20[t, h]; S_19[t, h]; S_17[t, h];
+  S_21[t, h]; S_18[t, h] }", child: { schedule: "[n] -> L_1[{ S_20[t, h] -> [(h)];
+  S_19[t, h] -> [(h)]; S_17[t, h] -> [(h)]; S_21[t, h] -> [(h)]; S_18[t, h] -> [(h)]
+  }]", child: { sequence: [ { filter: "[n] -> { S_17[t, h] }" }, { filter: "[n] ->
+  { S_18[t, h] }" }, { filter: "[n] -> { S_20[t, h] }" }, { filter: "[n] -> { S_21[t,
+  h] }" }, { filter: "[n] -> { S_19[t, h] }" } ] } } }, { filter: "[n] -> { S_22[t]
+  }" }, { filter: "[n] -> { S_16[t] }" }, { filter: "[n] -> { S_4[t]; S_7[t]; S_13[t];
+  S_10[t] }", child: { set: [ { filter: "[n] -> { S_4[t] }" }, { filter: "[n] -> {
+  S_7[t] }" }, { filter: "[n] -> { S_10[t] }" }, { filter: "[n] -> { S_13[t] }" }
+  ] } }, { filter: "[n] -> { S_23[t] }" }, { filter: "[n] -> { S_1[t] }" } ] } } }'
+arrays:
+- context: '{  :  }'
+  extent: '{ __pet_ret_0[] }'
+  element_type: float
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ n_0[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ nh[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ __pet_arg_0[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ qs[] }'
+  element_type: int
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ score[] }'
+  element_type: float
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '{ qk[] }'
+  element_type: float
+  element_size: 4
+  declared: 1
+- context: '{  :  }'
+  extent: '[n] -> { k[i0] : i0 >= 0 }'
+  element_type: float
+  element_size: 4
+- context: '{  :  }'
+  extent: '[n] -> { o[i0] : i0 >= 0 }'
+  element_type: float
+  element_size: 4
+- context: '{  :  }'
+  extent: '[n] -> { src[i0] : i0 >= 0 }'
+  element_type: float
+  element_size: 4
+statements:
+- line: -1
+  domain: '[n] -> { S_0[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_0[t] -> __pet_ret_0[] }'
+        index: '[n] -> { S_0[t] -> __pet_ret_0[] }'
+        reference: __pet_ref_0
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_2[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_2[t] -> n_0[] }'
+        index: '[n] -> { S_2[t] -> n_0[] }'
+        reference: __pet_ref_1
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_3[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_3[t] -> n_0[] }'
+        reference: __pet_ref_2
+        read: 0
+        write: 1
+      - type: int
+        value: 128
+- line: -1
+  domain: '[n] -> { S_5[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_5[t] -> nh[] }'
+        index: '[n] -> { S_5[t] -> nh[] }'
+        reference: __pet_ref_3
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_6[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_6[t] -> nh[] }'
+        reference: __pet_ref_4
+        read: 0
+        write: 1
+      - type: int
+        value: 4
+- line: -1
+  domain: '[n] -> { S_8[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_8[t] -> __pet_arg_0[] }'
+        index: '[n] -> { S_8[t] -> __pet_arg_0[] }'
+        reference: __pet_ref_5
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_9[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_9[t] -> __pet_arg_0[] }'
+        reference: __pet_ref_6
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_9[t] -> [(8192t)] }'
+        reference: __pet_ref_7
+        read: 1
+        write: 0
+- line: -1
+  domain: '[n] -> { S_11[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_11[t] -> qs[] }'
+        index: '[n] -> { S_11[t] -> qs[] }'
+        reference: __pet_ref_8
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_12[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_12[t] -> qs[] }'
+        reference: __pet_ref_9
+        read: 0
+        write: 1
+      - type: int
+        value: 128
+- line: 6
+  domain: '[n] -> { S_14[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_14[t] -> score[] }'
+        index: '[n] -> { S_14[t] -> score[] }'
+        reference: __pet_ref_10
+        kill: 1
+- line: 6
+  domain: '[n] -> { S_15[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_15[t] -> score[] }'
+        reference: __pet_ref_11
+        read: 0
+        write: 1
+      - type: double
+        value: 0
+        string: 0.0f
+- line: 8
+  domain: '[n] -> { S_17[t, h] : 0 <= t < n and 0 <= h <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_17[t, h] -> qk[] }'
+        index: '[n] -> { S_17[t, h] -> qk[] }'
+        reference: __pet_ref_12
+        kill: 1
+- line: 8
+  domain: '[n] -> { S_18[t, h] : 0 <= t < n and 0 <= h <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_18[t, h] -> qk[] }'
+        reference: __pet_ref_13
+        read: 0
+        write: 1
+      - type: double
+        value: 0
+        string: 0.0f
+- line: 9
+  domain: '[n] -> { S_20[t, h] : 0 <= t < n and 0 <= h <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: call
+      name: ggml_vec_dot_f32
+      arguments:
+      - type: access
+        index: '[n] -> { S_20[t, h] -> [(128)] }'
+        reference: __pet_ref_14
+        read: 1
+        write: 0
+      - type: op
+        operation: '&'
+        arguments:
+        - type: access
+          may_read: '[n] -> { S_20[t, h] -> qk[] }'
+          may_write: '[n] -> { S_20[t, h] -> qk[] }'
+          must_write: '[n] -> {  }'
+          index: '[n] -> { S_20[t, h] -> qk[] }'
+          reference: __pet_ref_15
+          read: 1
+          write: 1
+      - type: int
+        value: 0
+      - type: op
+        operation: '&'
+        arguments:
+        - type: access
+          index: '[n] -> { S_20[t, h] -> src[(8192t + 128h)] }'
+          reference: __pet_ref_16
+          read: 1
+          write: 0
+      - type: int
+        value: 0
+      - type: access
+        index: '[n] -> { S_20[t, h] -> k[] }'
+        depth: 1
+        reference: __pet_ref_17
+        read: 1
+        write: 0
+      - type: int
+        value: 0
+      - type: int
+        value: 1
+- line: 10
+  domain: '[n] -> { S_21[t, h] : 0 <= t < n and 0 <= h <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: +=
+      arguments:
+      - type: access
+        index: '[n] -> { S_21[t, h] -> score[] }'
+        reference: __pet_ref_18
+        read: 1
+        write: 1
+      - type: access
+        index: '[n] -> { S_21[t, h] -> qk[] }'
+        reference: __pet_ref_19
+        read: 1
+        write: 0
+- line: 8
+  domain: '[n] -> { S_19[t, h] : 0 <= t < n and 0 <= h <= 3 }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_19[t, h] -> qk[] }'
+        index: '[n] -> { S_19[t, h] -> qk[] }'
+        reference: __pet_ref_20
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_22[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_22[t] -> __pet_ret_0[] }'
+        reference: __pet_ref_21
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_22[t] -> score[] }'
+        reference: __pet_ref_22
+        read: 1
+        write: 0
+- line: 6
+  domain: '[n] -> { S_16[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_16[t] -> score[] }'
+        index: '[n] -> { S_16[t] -> score[] }'
+        reference: __pet_ref_23
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_4[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_4[t] -> n_0[] }'
+        index: '[n] -> { S_4[t] -> n_0[] }'
+        reference: __pet_ref_24
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_7[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_7[t] -> nh[] }'
+        index: '[n] -> { S_7[t] -> nh[] }'
+        reference: __pet_ref_25
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_10[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_10[t] -> __pet_arg_0[] }'
+        index: '[n] -> { S_10[t] -> __pet_arg_0[] }'
+        reference: __pet_ref_26
+        kill: 1
+- line: -1
+  domain: '[n] -> { S_13[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_13[t] -> qs[] }'
+        index: '[n] -> { S_13[t] -> qs[] }'
+        reference: __pet_ref_27
+        kill: 1
+- line: 19
+  domain: '[n] -> { S_23[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: =
+      arguments:
+      - type: access
+        index: '[n] -> { S_23[t] -> o[(t)] }'
+        reference: __pet_ref_28
+        read: 0
+        write: 1
+      - type: access
+        index: '[n] -> { S_23[t] -> __pet_ret_0[] }'
+        reference: __pet_ref_29
+        read: 1
+        write: 0
+- line: -1
+  domain: '[n] -> { S_1[t] : 0 <= t < n }'
+  body:
+    type: expression
+    expr:
+      type: op
+      operation: kill
+      arguments:
+      - type: access
+        killed: '[n] -> { S_1[t] -> __pet_ret_0[] }'
+        index: '[n] -> { S_1[t] -> __pet_ret_0[] }'
+        reference: __pet_ref_30
+        kill: 1
