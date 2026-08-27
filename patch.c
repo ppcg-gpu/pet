@@ -108,6 +108,29 @@ static __isl_give isl_space *patch_space(__isl_take isl_space *space1,
 		return space1;
 	}
 
+	/* The documented invariant of this function: with "add" set, an
+	 * address was passed, and an address is an array of at least one
+	 * dimension, so "space2" has one to give up.  It is stated a few
+	 * lines above and it was never checked.
+	 *
+	 * Unchecked it fails silently and expensively.  "dim" is unsigned,
+	 * so a space2 of no dimensions makes the subtraction wrap to four
+	 * billion, isl refuses the extension it is then asked for --
+	 * "space->n_out <= n_out" -- and NULL travels back out through
+	 * pet_expr_access_patch, which frees the expression.  The inlining
+	 * of that body does not happen and nothing says so beyond an
+	 * assertion naming a number nobody can place.  One call to an
+	 * indexer per graph cost exactly that, and it took a day to find.
+	 *
+	 * A violated invariant is worth saying out loud.  What must never
+	 * be done here is to clamp the subtraction: that turns a caller's
+	 * mistake into a space of the wrong shape and buries it deeper.
+	 */
+	if (add && isl_space_dim(space2, isl_dim_set) < add)
+		isl_die(isl_space_get_ctx(space2), isl_error_invalid,
+			"an address was patched onto an access with no "
+			"dimension to give up", goto error);
+
 	dim = isl_space_dim(space2, isl_dim_set) - add;
 	id = isl_space_get_tuple_id(space1, isl_dim_set);
 	if (isl_space_is_wrapping(space1)) {
