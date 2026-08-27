@@ -2108,7 +2108,25 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	 * costs to look at varies by four orders of magnitude, and a
 	 * block of the map is not a block of the work.
 	 */
+	/* HOW TO GET ONE FUNCTION UNDER A DEBUGGER.
+	 *
+	 * The map forks a worker per processor and hands each every n-th
+	 * entry, which is right for 909 functions and useless once one of
+	 * them crashes: a breakpoint in the parent never fires, and the
+	 * parent outlives the child and reports for it.
+	 *
+	 *   PET_MAP_SERIAL  one worker, so the entries are taken in order
+	 *   PET_MAP_ONLY    only entries whose qualified name contains this
+	 *   PET_MAP_NOFORK  no fork at all, so a debugger sees the fault
+	 *   PET_MAP_TRACE   name each entry as it is taken
+	 *
+	 * Together they turn "some part of a 909-function map died" into a
+	 * single process scanning a single function, which is where a
+	 * backtrace is worth reading.
+	 */
 	long n_worker = sysconf(_SC_NPROCESSORS_ONLN);
+	if (getenv("PET_MAP_SERIAL"))
+		n_worker = 1;
 
 	if (n_worker < 1)
 		n_worker = 1;
@@ -2123,7 +2141,7 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 	fflush(NULL);
 
 	for (long i = 0; i < n_worker; ++i) {
-		child[i] = fork();
+		child[i] = getenv("PET_MAP_NOFORK") ? 0 : fork();
 		if (child[i] < 0)
 			isl_die(ctx, isl_error_unknown,
 				"could not start a part of the map",
@@ -2146,6 +2164,16 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 		for (size_t j = i; j < entries.size(); j += n_worker) {
 			FunctionDecl *body = entries[j];
 			ScopLoc loc;
+			const char *only = getenv("PET_MAP_ONLY");
+			if (only && body->getQualifiedNameAsString().find(only)
+					== std::string::npos)
+				continue;
+			if (getenv("PET_MAP_TRACE")) {
+				fprintf(stderr, "map: part %ld takes %zu %s\n",
+					i, j,
+					body->getQualifiedNameAsString().c_str());
+				fflush(stderr);
+			}
 			PetScan ps(PP, ast_context, body, loc, options,
 				isl_union_map_copy(vb), independent);
 			pet_scop *scop = ps.scan(body);
@@ -2205,6 +2233,27 @@ int pet_linked_ast_map(isl_ctx *ctx, struct pet_linked_ast *linked,
 		if (waitpid(child[i], &status, 0) < 0)
 			isl_die(ctx, isl_error_unknown,
 				"lost a part of the map", return -1);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			/* WHICH PART, AND HOW IT WENT.  "a part of the map did
+			 * not finish" is an aggregate that swallows the cause:
+			 * a worker that segfaults and one that exits non-zero
+			 * read alike, and neither says what it was holding.
+			 * Finding a crash under it took a run over all 909
+			 * functions; with these three lines it takes one look.
+			 */
+			if (WIFSIGNALED(status))
+				fprintf(stderr, "map: part %ld (pid %d) died "
+					"on signal %d, holding:\n", i,
+					(int) child[i], WTERMSIG(status));
+			else
+				fprintf(stderr, "map: part %ld (pid %d) exited "
+					"%d, holding:\n", i, (int) child[i],
+					WEXITSTATUS(status));
+			for (size_t j = i; j < entries.size(); j += n_worker)
+				fprintf(stderr, "  %s\n",
+					entries[j]->getQualifiedNameAsString().c_str());
+			fflush(stderr);
+		}
 		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 			isl_die(ctx, isl_error_unknown,
 				"a part of the map did not finish",
