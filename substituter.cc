@@ -36,6 +36,7 @@
 #include <isl/space.h>
 #include <isl/aff.h>
 
+#include "expr.h"
 #include "expr_arg.h"
 #include "substituter.h"
 
@@ -198,6 +199,34 @@ static __isl_give pet_expr *substitute_access(__isl_take pet_expr *expr,
 	index = align_domain(index, space, n, expr_n_arg);
 
 	expr = pet_expr_access_patch(expr, index, is_addr);
+
+	/* THE COMPOSITION TRAVELS WITH THE SUBSTITUTION.
+	 *
+	 * The arena map is attached where the array's name is WRITTEN, and
+	 * after inlining the body writes a parameter instead.  So a buffer
+	 * the source touches both ways -- once directly, once by passing
+	 * "&name[i]" into a helper -- came out split in two: the direct
+	 * access composed onto the storage's representative, the inlined
+	 * one stayed on the member, and the two halves were different
+	 * arrays to isl.  No flow edge could join them, and the direct
+	 * write died with no reader.
+	 *
+	 * Measured on the 402-node scop, on ffn_gate_1_141 (member 12 of 19
+	 * in hca_k_all_3_350's storage, at offset 5120), which one statement
+	 * writes by name and two helpers read through a parameter:
+	 *
+	 *   may_read   composed  2   (the two inlined bodies)
+	 *   may_write  composed  1   (the inlined clamp's write)
+	 *   plain_may_write      2   (those, plus the direct write)
+	 *
+	 * The direct write is in the plain view and missing from the
+	 * composed one, because it alone had left for the representative.
+	 * The substitution is exactly the moment the body's access learns
+	 * which array it really touches, so it is where the map belongs.
+	 */
+	if (subs_expr->acc.arena)
+		expr = pet_expr_access_set_arena(expr,
+				isl_union_map_copy(subs_expr->acc.arena));
 
 	pet_expr_free(subs_expr);
 
