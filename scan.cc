@@ -3959,7 +3959,14 @@ __isl_give pet_function_summary *PetScan::get_summary_from_tree(
 	int_size = size_in_bytes(ast_context, ast_context.IntTy);
 	scop = pet_scop_from_pet_tree(tree, int_size,
 					&::extract_array, &body_scan, pc);
-	scop = scan_arrays(scop, pc);
+	/* NOT the scop the annotation is about.  This one is a called
+	 * function's body, built only to compute its summary and freed
+	 * below; pet_arena_map is file-scope and still holds the caller's
+	 * pragmas, so adding their arrays here invents twelve arrays in a
+	 * scop that mentions none of them -- and reports all twelve as
+	 * unspelled, which is what it did.
+	 */
+	scop = scan_arrays(scop, pc, 0);
 	may_read = isl_union_map_range(pet_scop_get_may_reads(scop));
 	may_write = isl_union_map_range(pet_scop_get_may_writes(scop));
 	must_write = isl_union_map_range(pet_scop_get_must_writes(scop));
@@ -4141,7 +4148,7 @@ struct pet_scop *PetScan::extract_scop(__isl_take pet_tree *tree)
 	pc = pet_context_add_parameters(pc, tree, &::get_array_size, this);
 	scop = pet_scop_from_pet_tree(tree, int_size,
 					&::extract_array, this, pc);
-	scop = scan_arrays(scop, pc);
+	scop = scan_arrays(scop, pc, 1);
 	pet_context_free(pc);
 
 	return scop;
@@ -5034,7 +5041,7 @@ static void arena_add_arrays(isl_ctx *ctx, array_desc_set &arrays)
  * as outer.
  */
 struct pet_scop *PetScan::scan_arrays(struct pet_scop *scop,
-	__isl_keep pet_context *pc)
+	__isl_keep pet_context *pc, int arena)
 {
 	int i, n, n_alloc;
 	array_desc_set arrays, has_sub;
@@ -5050,7 +5057,8 @@ struct pet_scop *PetScan::scan_arrays(struct pet_scop *scop,
 		return NULL;
 
 	pet_scop_collect_arrays(scop, arrays);
-	arena_add_arrays(ctx, arrays);
+	if (arena)
+		arena_add_arrays(ctx, arrays);
 	if (arrays.size() == 0)
 		return scop;
 

@@ -434,7 +434,7 @@ private:
 	struct pet_scop *scan(clang::Stmt *stmt);
 
 	struct pet_scop *scan_arrays(struct pet_scop *scop,
-		__isl_keep pet_context *pc);
+		__isl_keep pet_context *pc, int arena);
 	struct pet_array *extract_array(clang::ValueDecl *decl,
 		PetTypes *types, __isl_keep pet_context *pc);
 	struct pet_array *extract_array(__isl_keep isl_id_list *decls,
